@@ -8,6 +8,7 @@ from torch.utils import data
 import torch.distributed as dist
 from utils.transforms import get_affine_transform
 import os.path as osp
+from collections import defaultdict
 
 class HelenDataSet(data.Dataset):
     def __init__(self, root, dataset, crop_size=[473, 473], scale_factor=0.25,
@@ -27,7 +28,7 @@ class HelenDataSet(data.Dataset):
         self.dataset = dataset
 
         self.file_list_name = osp.join(root, dataset + '_list.txt')
-        self.im_list = [line.split()[0][7:-4] for line in open(self.file_list_name).readlines()]
+        self.im_list = [line.split() for line in open(self.file_list_name).readlines()]
         self.number_samples = len(self.im_list)
 
     def __len__(self):
@@ -51,11 +52,15 @@ class HelenDataSet(data.Dataset):
 
     def __getitem__(self, index):
         # Load training image
-        im_name = self.im_list[index]
+        image_name, label_name = self.im_list[index]
+        im_name = os.path.splitext(image_name.replace('_image', ''))[0]
 
-        im_path = os.path.join(self.root, 'images', im_name + '.jpg')
-        edge_path = os.path.join(self.root, 'edges', im_name + '.png')
-        parsing_anno_path = os.path.join(self.root, 'labels', im_name + '.png')
+        im_path = os.path.join(self.root, image_name)
+        edge_path = os.path.join(self.root, label_name.replace('labels', 'edges'))
+        parsing_anno_path = os.path.join(self.root, label_name)
+        assert os.path.exists(edge_path), print(edge_path)
+        assert os.path.exists(im_path), print(im_path)
+        assert os.path.exists(parsing_anno_path), print(parsing_anno_path)
 
         im = cv2.imread(im_path, cv2.IMREAD_COLOR)
         edge = cv2.imread(edge_path, cv2.IMREAD_GRAYSCALE)
@@ -66,16 +71,16 @@ class HelenDataSet(data.Dataset):
         center, s = self._box2cs([0, 0, w - 1, h - 1])
         r = 0
 
-        if self.dataset != 'test': 
-            parsing_anno = cv2.imread(parsing_anno_path, cv2.IMREAD_GRAYSCALE)
+        parsing_anno = cv2.imread(parsing_anno_path, cv2.IMREAD_GRAYSCALE)
 
-            if self.dataset in 'train':
+        # Image clipping for augmentation
+        if self.dataset == 'train':
 
-                sf = self.scale_factor
-                rf = self.rotation_factor
-                s = s * np.clip(np.random.randn() * sf + 1, 1 - sf, 1 + sf)
-                r = np.clip(np.random.randn() * rf, -rf * 2, rf * 2) \
-                    if random.random() <= 0.6 else 0
+            sf = self.scale_factor
+            rf = self.rotation_factor
+            s = s * np.clip(np.random.randn() * sf + 1, 1 - sf, 1 + sf)
+            r = np.clip(np.random.randn() * rf, -rf * 2, rf * 2) \
+                if random.random() <= 0.6 else 0
 
         trans = get_affine_transform(center, s, r, self.crop_size)
         input = cv2.warpAffine(
@@ -93,6 +98,19 @@ class HelenDataSet(data.Dataset):
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=(0, 0, 0))
         edge[np.where(edge != 0)] = 1
+        label_parsing = cv2.warpAffine(
+            parsing_anno,
+            trans,
+            (int(self.crop_size[1]), int(self.crop_size[0])),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(255))
+        bi_label_parsing = np.copy(label_parsing)
+        for mask_id in range(11):
+            if mask_id in [1, 2, 3, 4, 5, 6, 7, 8, 9]:
+                bi_label_parsing[bi_label_parsing == mask_id] = 1
+            else:
+                bi_label_parsing[bi_label_parsing == mask_id] = 0
 
         if self.transform:
             input = self.transform(input)
@@ -106,18 +124,10 @@ class HelenDataSet(data.Dataset):
             'rotation': r
         }
 
-        if self.dataset not in 'train':
-            return input, edge, meta
-        else:
-
-            label_parsing = cv2.warpAffine(
-                parsing_anno,
-                trans,
-                (int(self.crop_size[1]), int(self.crop_size[0])),
-                flags=cv2.INTER_NEAREST,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=(255))
+        if self.dataset in 'train':
 
             label_parsing = torch.from_numpy(label_parsing)
+            bi_label_parsing = torch.from_numpy(bi_label_parsing)
+            edge = torch.from_numpy(edge)
 
-            return input, label_parsing, edge, meta
+        return input, bi_label_parsing, label_parsing, edge, meta

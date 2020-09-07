@@ -41,6 +41,8 @@ def get_confusion_matrix(gt_label, pred_label, num_classes):
     :param num_classes: the nunber of class
     :return: the confusion matrix
     """
+    gt_label = np.reshape(gt_label, (-1))
+    pred_label = np.reshape(pred_label, (-1))
     index = (gt_label * num_classes + pred_label).astype('int32')
     label_count = np.bincount(index)
     confusion_matrix = np.zeros((num_classes, num_classes))
@@ -86,30 +88,52 @@ def _merge(*list_pairs):
         b += bl
     return a, b
 
+def compute_confusion_matrix(preds, targets, n_class):
+
+    confusion_matrix = np.zeros((n_class, n_class))
+    N = len(preds)
+    for i in range(N):
+        pred = np.asarray(preds[i], dtype=np.int32)
+        target = np.asarray(targets[i], dtype=np.int32)
+
+        target[target == 255] = 0
+        confusion_matrix += get_confusion_matrix(target, pred, n_class)
+
+    return confusion_matrix
+#    f1_list = []
+#    mIoU_list = []
+#    for i in range(n_class):
+#        n_target = np.sum(confusion_matrix[i, :])
+#        n_pred = np.sum(confusion_matrix[:, i])
+#        intersection = confusion_matrix[i][i]
+#        f1 = 2 * (1 / (intersection / n_target) + 1 / (intersection / n_pred))
+#        mIoU = intersection / (n_target + n_pred - intersection)
+#        f1_list.append(f1)
+#        mIoU_list.append(mIoU)
 
 def compute_mean_ioU(preds, scales, centers, num_classes, datadir, input_size=[473, 473], dataset='val', reverse=False):
     file_list_name = os.path.join(datadir, dataset + '_list.txt')
-    val_id = [line.split()[0][7:-4] for line in open(file_list_name).readlines()]
+    val_id = [line.split()[1] for line in open(file_list_name).readlines()]
 
     confusion_matrix = np.zeros((num_classes, num_classes))
 
-    label_names_file = os.path.join(datadir, 'label_names.txt')
-    gt_label_names = pred_label_names = _read_names(label_names_file)
-
-    assert gt_label_names[0] == pred_label_names[0] == 'bg'
+#    label_names_file = os.path.join(datadir, 'label_names.txt')
+#    gt_label_names = pred_label_names = _read_names(label_names_file)
+#
+#    assert gt_label_names[0] == pred_label_names[0] == 'bg'
 
     hists = []
     for i, im_name in enumerate(val_id):
-        gt_path = os.path.join(datadir, 'labels_raw', im_name + '.png')
-        proj = np.load(os.path.join(datadir, 'project', im_name + '.npy'))
+        gt_path = os.path.join(datadir, im_name)
         gt = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
         h, w = gt.shape
         pred_out = preds[i]
         s = scales[i]
         c = centers[i]
         pred = transform_parsing(pred_out, c, s, w, h, input_size)
-        if reverse:
-            pred = cv2.warpAffine(pred, proj, (gt.shape[1], gt.shape[0]), borderValue=0, flags = cv2.INTER_NEAREST)
+#        if reverse:
+#            proj = np.load(os.path.join(datadir, 'project', im_name + '.npy'))
+#            pred = cv2.warpAffine(pred, proj, (gt.shape[1], gt.shape[0]), borderValue=0, flags = cv2.INTER_NEAREST)
 
         gt = np.asarray(gt, dtype=np.int32)
         pred = np.asarray(pred, dtype=np.int32)
@@ -119,64 +143,72 @@ def compute_mean_ioU(preds, scales, centers, num_classes, datadir, input_size=[4
         gt = gt[ignore_index]
         pred = pred[ignore_index]
 
-        hist = fast_histogram(gt, pred,
-                              len(gt_label_names), len(pred_label_names))
+#        hist = fast_histogram(gt, pred,
+#                              len(gt_label_names), len(pred_label_names))
+        hist = fast_histogram(gt, pred, num_classes, num_classes)
         hists.append(hist)
 
         confusion_matrix += get_confusion_matrix(gt, pred, num_classes)
 
     hist_sum = np.sum(np.stack(hists, axis=0), axis=0)
 
-    eval_names = dict()
-    for label_name in gt_label_names:
-        gt_ind = gt_label_names.index(label_name)
-        pred_ind = pred_label_names.index(label_name)
-        eval_names[label_name] = ([gt_ind], [pred_ind])
-    if 'le' in eval_names and 're' in eval_names:
-        eval_names['eyes'] = _merge(eval_names['le'], eval_names['re'])
-    if 'lb' in eval_names and 'rb' in eval_names:
-        eval_names['brows'] = _merge(eval_names['lb'], eval_names['rb'])
-    if 'ulip' in eval_names and 'imouth' in eval_names and 'llip' in eval_names:
-        eval_names['mouth'] = _merge(
-            eval_names['ulip'], eval_names['imouth'], eval_names['llip'])
-    if 'eyes' in eval_names and 'brows' in eval_names and 'nose' in eval_names and 'mouth' in eval_names:
-        eval_names['overall'] = _merge(
-            eval_names['eyes'], eval_names['brows'], eval_names['nose'], eval_names['mouth'])
-    print(eval_names)
+#    eval_names = dict()
+#    for label_name in gt_label_names:
+#        gt_ind = gt_label_names.index(label_name)
+#        pred_ind = pred_label_names.index(label_name)
+#        eval_names[label_name] = ([gt_ind], [pred_ind])
+#    if 'le' in eval_names and 're' in eval_names:
+#        eval_names['eyes'] = _merge(eval_names['le'], eval_names['re'])
+#    if 'lb' in eval_names and 'rb' in eval_names:
+#        eval_names['brows'] = _merge(eval_names['lb'], eval_names['rb'])
+#    if 'ulip' in eval_names and 'imouth' in eval_names and 'llip' in eval_names:
+#        eval_names['mouth'] = _merge(
+#            eval_names['ulip'], eval_names['imouth'], eval_names['llip'])
+#    if 'eyes' in eval_names and 'brows' in eval_names and 'nose' in eval_names and 'mouth' in eval_names:
+#        eval_names['overall'] = _merge(
+#            eval_names['eyes'], eval_names['brows'], eval_names['nose'], eval_names['mouth'])
+#    print(eval_names)
 
 
     pos = confusion_matrix.sum(1)
     res = confusion_matrix.sum(0)
     tp = np.diag(confusion_matrix)
 
-    pixel_accuracy = (tp.sum() / pos.sum()) * 100
-    mean_accuracy = ((tp / np.maximum(1.0, pos)).mean()) * 100
+#    pixel_accuracy = (tp.sum() / pos.sum()) * 100
+#    mean_accuracy = ((tp / np.maximum(1.0, pos)).mean()) * 100
     IoU_array = (tp / np.maximum(1.0, pos + res - tp))
-    IoU_array = IoU_array * 100
-    mean_IoU = IoU_array.mean()
-    print('Pixel accuracy: %f \n' % pixel_accuracy)
-    print('Mean accuracy: %f \n' % mean_accuracy)
-    print('Mean IU: %f \n' % mean_IoU)
-    mIoU_value = []
-    f1_value = []
+#    IoU_array = IoU_array * 100
+#    mean_IoU = IoU_array.mean()
+#    print('Pixel accuracy: %f \n' % pixel_accuracy)
+#    print('Mean accuracy: %f \n' % mean_accuracy)
+#    print('Mean IU: %f \n' % mean_IoU)
+#    mIoU_value = []
+#    f1_value = []
 
-    for i, (label, iou) in enumerate(zip(LABELS, IoU_array)):
-        mIoU_value.append((label, iou))
+#    for i, (label, iou) in enumerate(zip(LABELS, IoU_array)):
+#        mIoU_value.append((label, iou))
 
-    for eval_name, (gt_inds, pred_inds) in eval_names.items():
-        A = hist_sum[gt_inds, :].sum()
-        B = hist_sum[:, pred_inds].sum()
-        intersected = hist_sum[gt_inds, :][:, pred_inds].sum()
+    f1_array = []
+    for i in range(num_classes):
+        A = hist_sum[i, :].sum()
+        B = hist_sum[:, i].sum()
+        intersected = hist_sum[i][i]
         f1 = 2 * intersected / (A + B)
-        print(f'f1_{eval_name}={f1}')
-        f1_value.append((eval_name, f1))
+        f1_array.append(f1)
+#    for eval_name, (gt_inds, pred_inds) in eval_names.items():
+#        A = hist_sum[gt_inds, :].sum()
+#        B = hist_sum[:, pred_inds].sum()
+#        intersected = hist_sum[gt_inds, :][:, pred_inds].sum()
+#        f1 = 2 * intersected / (A + B)
+#        #print(f'f1_{eval_name}={f1}')
+#        f1_value.append((eval_name, f1))
 
-    mIoU_value.append(('Pixel accuracy', pixel_accuracy))
-    mIoU_value.append(('Mean accuracy', mean_accuracy))
-    mIoU_value.append(('Mean IU', mean_IoU))
-    mIoU_value = OrderedDict(mIoU_value)
-    f1_value = OrderedDict(f1_value)
-    return mIoU_value, f1_value
+#    mIoU_value.append(('Pixel accuracy', pixel_accuracy))
+#    mIoU_value.append(('Mean accuracy', mean_accuracy))
+#    mIoU_value.append(('Mean IU', mean_IoU))
+#    mIoU_value = OrderedDict(mIoU_value)
+#    f1_value = OrderedDict(f1_value)
+    return IoU_array, f1_array
 
 def write_results(preds, scales, centers, datadir, dataset, result_dir, input_size=[473, 473]):
     palette = get_palette(20)

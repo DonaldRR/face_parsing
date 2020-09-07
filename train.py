@@ -1,5 +1,5 @@
 import argparse
-
+import tqdm
 import torch
 torch.multiprocessing.set_start_method("spawn", force=True)
 from torch.utils import data
@@ -31,9 +31,9 @@ import matplotlib.pyplot as plt
 start = timeit.default_timer()
   
 BATCH_SIZE = 8
-DATA_DIRECTORY = './datasets/Helen'
+DATA_DIRECTORY = './dataset/Helen'
 IGNORE_LABEL = 255
-INPUT_SIZE = '473,473'
+INPUT_SIZE = '128,128'
 LEARNING_RATE = 1e-3
 MOMENTUM = 0.9
 NUM_CLASSES = 11
@@ -208,7 +208,7 @@ def main():
     else:
         model = SingleGPU(model)
 
-    criterion = CriterionCrossEntropyEdgeParsing_boundary_attention_loss(loss_weight=[1, 1, 4])
+    criterion = CriterionCrossEntropyEdgeParsing_boundary_attention_loss(loss_weight=[1, 1, 1, 4])
     criterion.cuda()
 
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -241,77 +241,96 @@ def main():
     optimizer.zero_grad()
 
     total_iters = args.epochs * len(trainloader)
-    for epoch in range(args.start_epoch, args.epochs):
-        model.train()
-        if distributed:
-            train_sampler.set_epoch(epoch)
-        for i_iter, batch in enumerate(trainloader):
-            i_iter += len(trainloader) * epoch
-            lr = adjust_learning_rate(optimizer, i_iter, total_iters)
+    with tqdm.tqdm(total=total_iters, position=0) as pbar:
+        for epoch in range(args.start_epoch, args.epochs):
+            model.train()
+            if distributed:
+                train_sampler.set_epoch(epoch)
+            for i_iter, batch in enumerate(trainloader):
+                i_iter += len(trainloader) * epoch
+                lr = adjust_learning_rate(optimizer, i_iter, total_iters)
 
-            images, labels, edges, _ = batch
-            labels = labels.long().cuda(non_blocking=True)
-            edges = edges.long().cuda(non_blocking=True)
+                images, bi_labels, labels, edges, _ = batch
+                labels = labels.long().cuda()
+                edges = edges.long().cuda()
+                bi_labels = bi_labels.long().cuda()
 
-            preds = model(images)
-            
+                preds = model(images)
 
-            loss = criterion(preds, [labels, edges])
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                loss_parse, loss_parse_bi, loss_edge, loss_att_edge = criterion(preds, [labels, bi_labels, edges])
+                loss = loss_parse * 1 + loss_parse_bi * 1 + loss_att_edge * 1 + loss_att_edge * 4
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-            with torch.no_grad():
-                loss = loss.detach() * labels.shape[0]
-                count = labels.new_tensor([labels.shape[0]], dtype=torch.long)
-                if dist.is_initialized():
-                    dist.all_reduce(count, dist.ReduceOp.SUM)
-                    dist.all_reduce(loss, dist.ReduceOp.SUM)
-                loss /= count.item()
+                with torch.no_grad():
+                    loss = loss.detach() * labels.shape[0]
+                    count = labels.new_tensor([labels.shape[0]], dtype=torch.long)
+                    if dist.is_initialized():
+                        dist.all_reduce(count, dist.ReduceOp.SUM)
+                        dist.all_reduce(loss, dist.ReduceOp.SUM)
+                    loss /= count.item()
 
+                if not dist.is_initialized() or dist.get_rank() == 0:
+                    if i_iter % 50 == 0:
+                        writer.add_scalar('learning_rate', lr, i_iter)
+                        writer.add_scalar('loss', loss.data.cpu().numpy(), i_iter)
+
+                    if i_iter % 500 == 0:
+
+                        images_inv = inv_preprocess(images, args.save_num_images)
+                        labels_colors = decode_parsing(labels, args.save_num_images, args.num_classes, is_pred=False)
+                        edges_colors = decode_parsing(edges, args.save_num_images, 2, is_pred=False)
+
+                        if isinstance(preds, list):
+                            preds = preds[0]
+                        preds_colors = decode_parsing(preds[0], args.save_num_images, args.num_classes, is_pred=True)
+                        pred_edges = decode_parsing(preds[1], args.save_num_images, 2, is_pred=True)
+
+                        img = vutils.make_grid(images_inv, normalize=False, scale_each=True)
+                        lab = vutils.make_grid(labels_colors, normalize=False, scale_each=True)
+                        pred = vutils.make_grid(preds_colors, normalize=False, scale_each=True)
+                        edge = vutils.make_grid(edges_colors, normalize=False, scale_each=True)
+                        pred_edge = vutils.make_grid(pred_edges, normalize=False, scale_each=True)
+
+
+                        writer.add_image('Images/', img, i_iter)
+                        writer.add_image('Labels/', lab, i_iter)
+                        writer.add_image('Preds/', pred, i_iter)
+                        writer.add_image('Edge/', edge, i_iter)
+                        writer.add_image('Pred_edge/', pred_edge, i_iter)
+
+                    msg = 'epoch:%d | l_parse:%.2f l_parse_bi:%.2f l_edge:%.2f l_att:%.2f l_sum:%.2f' % \
+                          (
+                              epoch,
+                              loss_parse.data.cpu().numpy(),
+                              loss_parse_bi.data.cpu().numpy(),
+                              loss_edge.data.cpu().numpy(),
+                              loss_att_edge.data.cpu().numpy(),
+                              loss.data.cpu().numpy(),
+                          )
+                    pbar.set_description(msg)
+                    pbar.update(1)
+                    #print('iter = {} of {} completed, loss = {}'.format(i_iter, total_iters, loss.data.cpu().numpy()))
             if not dist.is_initialized() or dist.get_rank() == 0:
-                if i_iter % 50 == 0:
-                    writer.add_scalar('learning_rate', lr, i_iter)
-                    writer.add_scalar('loss', loss.data.cpu().numpy(), i_iter)
+                torch.save(model.module.state_dict(), osp.join(args.snapshot_dir, TIMESTAMP, 'epoch_' + str(epoch) + '.pth'))
 
-                if i_iter % 500 == 0:
+                if epoch % args.test_fre == 0:
+                    valid_dict = valid(model, valloader, input_size, num_samples)
+                    #preds_parsing, preds_parsing_bi, preds_edge, scales, centers = valid(model, valloader, input_size, num_samples)
+                    #parsing_mIoU, parsing_f1 = compute_mean_ioU(preds_parsing, scales, centers, 11, args.data_dir, input_size, 'test', True)
+                    #parsing_bi_mIoU, parsing_bi_f1 = compute_mean_ioU(preds_parsing_bi, scales, centers, 2, args.data_dir, input_size, 'test', True)
+                    #edge_mIoU, edge_f1 = compute_mean_ioU(preds_edge, scales, centers, 2, args.data_dir, input_size, 'test', True)
+                    #if f1['overall'] > best_f1:
+                    #    torch.save(model.module.state_dict(), osp.join(args.snapshot_dir, TIMESTAMP, 'best.pth'))
+                    #    best_f1 = f1['overall']
+                    def write_tf(prefix, arr, epoch, writer):
+                        for i, value in enumerate(arr):
+                            writer.add_scalar(prefix+'_%d' % i, value, epoch)
 
-                    images_inv = inv_preprocess(images, args.save_num_images)
-                    labels_colors = decode_parsing(labels, args.save_num_images, args.num_classes, is_pred=False)
-                    edges_colors = decode_parsing(edges, args.save_num_images, 2, is_pred=False)
-
-                    if isinstance(preds, list):
-                        preds = preds[0]
-                    preds_colors = decode_parsing(preds[0], args.save_num_images, args.num_classes, is_pred=True)
-                    pred_edges = decode_parsing(preds[1], args.save_num_images, 2, is_pred=True)
-
-                    img = vutils.make_grid(images_inv, normalize=False, scale_each=True)
-                    lab = vutils.make_grid(labels_colors, normalize=False, scale_each=True)
-                    pred = vutils.make_grid(preds_colors, normalize=False, scale_each=True)
-                    edge = vutils.make_grid(edges_colors, normalize=False, scale_each=True)
-                    pred_edge = vutils.make_grid(pred_edges, normalize=False, scale_each=True)
-
-
-                    writer.add_image('Images/', img, i_iter)
-                    writer.add_image('Labels/', lab, i_iter)
-                    writer.add_image('Preds/', pred, i_iter)
-                    writer.add_image('Edge/', edge, i_iter)
-                    writer.add_image('Pred_edge/', pred_edge, i_iter)
-    
-                print('iter = {} of {} completed, loss = {}'.format(i_iter, total_iters, loss.data.cpu().numpy()))
-        if not dist.is_initialized() or dist.get_rank() == 0:
-            torch.save(model.module.state_dict(), osp.join(args.snapshot_dir, TIMESTAMP, 'epoch_' + str(epoch) + '.pth'))
-
-            if epoch % args.test_fre == 0:
-                parsing_preds, scales, centers = valid(model, valloader, input_size, num_samples)
-                mIoU, f1 = compute_mean_ioU(parsing_preds, scales, centers, args.num_classes, args.data_dir, input_size, 'test', True)
-                if f1['overall'] > best_f1:
-                    torch.save(model.module.state_dict(), osp.join(args.snapshot_dir, TIMESTAMP, 'best.pth'))
-                    best_f1 = f1['overall']
-                print(mIoU)
-                print(f1)
-                writer.add_scalars('mIoU', mIoU, epoch)
-                writer.add_scalars('f1', f1, epoch)
+                    for semantic_name, semantic_ret in valid_dict.items():
+                        write_tf(semantic_name + '_mIoU', semantic_ret['mIoU'], epoch, writer)
+                        write_tf(semantic_name + '_f1', semantic_ret['f1'], epoch, writer)
 
 
     end = timeit.default_timer()

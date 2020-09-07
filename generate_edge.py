@@ -1,9 +1,11 @@
 import time
 import torch
-import os, numpy as np
+import os
+import numpy as np
 import os.path as osp
 import shutil
 import cv2
+from tqdm import tqdm
 
 def generate_edge(label_dir, edge_dir):
     """Generate edges for labels in label_dir and save them to edge_dir
@@ -13,7 +15,7 @@ def generate_edge(label_dir, edge_dir):
         shutil.rmtree(edge_dir)
     os.makedirs(edge_dir)
     ll = os.listdir(label_dir)
-    for filename in ll:
+    for filename in tqdm(ll):
         print(filename)
         label = cv2.imread(osp.join(label_dir, filename), cv2.IMREAD_GRAYSCALE)
         edge = np.zeros_like(label)
@@ -28,4 +30,17 @@ def generate_edge(label_dir, edge_dir):
                             edge[i,j] = 255
         cv2.imwrite(osp.join(edge_dir, filename), edge)
 
-generate_edge('dataset/helen/labels/', 'dataset/helen/edges/')
+import argparse
+def parse_args():
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-input', type=str, default='dataset/helen/labels/')
+    parser.add_argument('-output', type=str, default='dataset/helen/edges/')
+    args = parser.parse_args()
+
+    return args
+
+if __name__ == '__main__':
+
+    args = parse_args()
+    generate_edge(args.input, args.output)

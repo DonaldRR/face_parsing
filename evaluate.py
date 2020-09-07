@@ -16,6 +16,7 @@ from utils.miou import compute_mean_ioU
 from copy import deepcopy
 import cv2
 from inplace_abn import InPlaceABN
+from utils.miou import compute_mean_ioU, compute_confusion_matrix
 
 DATA_DIRECTORY = './datasets/Helen'
 IGNORE_LABEL = 255
@@ -54,17 +55,25 @@ def get_arguments():
 
 def valid(model, valloader, input_size, num_samples, dir=None):
     model.eval()
-    parsing_preds = np.zeros((num_samples, input_size[0], input_size[1]),
-                             dtype=np.uint8)
+#    preds_parsing = np.zeros((num_samples, input_size[0], input_size[1]),
+#                             dtype=np.uint8)
+#    preds_parsing_bi = np.zeros((num_samples, input_size[0], input_size[1]),
+#                             dtype=np.uint8)
+#    preds_edge = np.zeros((num_samples, input_size[0], input_size[1]),
+#                             dtype=np.uint8)
 
     scales = np.zeros((num_samples, 2), dtype=np.float32)
     centers = np.zeros((num_samples, 2), dtype=np.int32)
+
+    ConfMat_parsing = np.zeros((11, 11))
+    ConfMat_parsing_bi = np.zeros((2, 2))
+    ConfMat_edge = np.zeros((2, 2))
 
     idx = 0
     interp = torch.nn.Upsample(size=(input_size[0], input_size[1]), mode='bilinear', align_corners=True)
     with torch.no_grad():
         for index, batch in enumerate(valloader):
-            image, edge, meta = batch
+            image, bi_label, label, edge, meta = batch
             num_images = image.size(0)
             if index % 10 == 0:
                 print('%d  processd' % (index * num_images))
@@ -74,31 +83,46 @@ def valid(model, valloader, input_size, num_samples, dir=None):
             scales[idx:idx + num_images, :] = s[:, :]
             centers[idx:idx + num_images, :] = c[:, :]
 
-            outputs,_ = model(image.cuda())
+            pred_parsing, pred_parsing_bi, pred_edge = model(image.cuda())
 
-            if isinstance(outputs, list):
-                for output in outputs:
-                    parsing = output
-                    nums = len(parsing)
-                    parsing = interp(parsing).data.cpu().numpy()
-                    parsing = parsing.transpose(0, 2, 3, 1)  # NCHW NHWC
-                    parsing_preds[idx:idx + nums, :, :] = np.asarray(np.argmax(parsing, axis=3), dtype=np.uint8)
+            def parse_to_label(pred, iterp_func):
 
-                    idx += nums
-            else:
-                parsing = outputs
-                parsing = interp(parsing).data.cpu().numpy()
-                parsing = parsing.transpose(0, 2, 3, 1)  # NCHW NHWC
-                parsing_preds[idx:idx + num_images, :, :] = np.asarray(np.argmax(parsing, axis=3), dtype=np.uint8)
-                if dir is not None:
-                    for i in range(len(meta['name'])):
-                        cv2.imwrite(os.path.join(dir, meta['name'][i] + '.png'), np.asarray(np.argmax(parsing, axis=3))[i])
+                pred = iterp_func(pred).data.cpu().numpy()
+                pred = pred.transpose(0, 2, 3, 1)
+                pred = np.asarray(np.argmax(pred, axis=3), dtype=np.uint8)
 
-                idx += num_images
-    parsing_preds = parsing_preds[:num_samples, :, :]
+                return pred
+#            preds_parsing[idx:idx + num_images, :, :] = parse_to_label(pred_parsing, interp)
+#            preds_parsing_bi[idx:idx + num_images, :, :] = parse_to_label(pred_parsing_bi, interp)
+#            preds_edge[idx:idx + num_images, :, :] = parse_to_label(pred_edge, interp)
+#            idx += num_images
+            ConfMat_parsing += compute_confusion_matrix(parse_to_label(pred_parsing, interp), label, pred_parsing.size(1))
+            ConfMat_parsing_bi += compute_confusion_matrix(parse_to_label(pred_parsing_bi, interp), bi_label, pred_parsing_bi.size(1))
+            ConfMat_edge += compute_confusion_matrix(parse_to_label(pred_edge, interp), edge, pred_edge.size(1))
 
+    def compute_mIoU_f1(m):
+        n_class = len(m)
+        mIoUs = []
+        f1s = []
+        for i in range(n_class):
+            intersection = m[i][i]
+            row_sum = np.sum(m[i, :])
+            col_sum = np.sum(m[:, i])
+            f1s.append(2 * (row_sum / intersection + col_sum / intersection))
+            mIoUs.append(intersection / (row_sum + col_sum - intersection))
 
-    return parsing_preds, scales, centers
+        return mIoUs, f1s
+
+    parsing_mIoUs, parsing_f1s = compute_mIoU_f1(ConfMat_parsing)
+    parsing_bi_mIoUs, parsing_bi_f1s = compute_mIoU_f1(ConfMat_parsing_bi)
+    edge_mIoUs, edge_f1s = compute_mIoU_f1(ConfMat_edge)
+
+    return {
+        'parsing': {'mIoU': parsing_mIoUs, 'f1': parsing_f1s},
+        'parsing_bi': {'mIoU': parsing_bi_mIoUs, 'f1': parsing_bi_f1s},
+        'edge': {'mIoU': edge_mIoUs, 'f1': edge_f1s}
+    }
+
 
 def main():
     """Create the model and start the evaluation process."""
