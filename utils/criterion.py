@@ -98,7 +98,7 @@ class CriterionCrossEntropyEdgeParsing_boundary_attention_loss(nn.Module):
 
 class DiscriminativeLoss(nn.Module):
 
-    def __init__(self, n_classes, alpha, beta):
+    def __init__(self, n_classes, alpha=.3, beta=.5):
         super(DiscriminativeLoss, self).__init__()
 
         self.n_classes = n_classes
@@ -106,13 +106,17 @@ class DiscriminativeLoss(nn.Module):
         self.beta = beta
 
     def forward(self, embedding, label):
+        import pdb
+        pdb.set_trace()
 
-        # embedding: (n, c, h, w)
+        # embedding: (n, c, h', w')
         # label: (n, h, w)
-        # alpha: scalar, maximum cluster radius
+        # alpha: scalar, maximum intra-cluster radius
         # beta: scalar, minimum inter-cluster radius
 
-        N, C, H, W = embedding.size()
+        N, H, W = label.size()
+        C = embedding.size(1)
+        embedding = F.upsample(embedding, size=(H, W), mode='bilinear')
         one_hot_label = torch.nn.functional.one_hot(label.view(-1), self.n_classes).view(N, H * W, -1).permute(0, 2,
                                                                                                           1)  # (n, K, h * w)
         count = one_hot_label.view(N, self.n_classes, -1).sum(2)  # (n, K)

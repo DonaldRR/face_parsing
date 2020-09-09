@@ -130,4 +130,4 @@ class HelenDataSet(data.Dataset):
             bi_label_parsing = torch.from_numpy(bi_label_parsing)
             edge = torch.from_numpy(edge)
 
-        return input, bi_label_parsing, label_parsing, edge, meta
+        return input, label_parsing, meta

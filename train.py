@@ -263,7 +263,7 @@ def main():
                 i_iter += len(trainloader) * epoch
                 lr = adjust_learning_rate(optimizer, i_iter, total_iters)
 
-                images, labels = batch
+                images, labels, _ = batch
                 labels = labels.long().cuda()
 
                 preds, shallow_embedding, deep_embedding = model(images)
@@ -292,7 +292,6 @@ def main():
 
                         images_inv = inv_preprocess(images, args.save_num_images)
                         labels_colors = decode_parsing(labels, args.save_num_images, args.num_classes, is_pred=False)
-                        edges_colors = decode_parsing(edges, args.save_num_images, 2, is_pred=False)
 
                         if isinstance(preds, list):
                             preds = preds[0]
@@ -304,25 +303,20 @@ def main():
                         lab = vutils.make_grid(labels_colors, normalize=False, scale_each=True)
                         pred = vutils.make_grid(preds_colors, normalize=False, scale_each=True)
                         pred_bi = vutils.make_grid(preds_colors_bi, normalize=False, scale_each=True)
-                        edge = vutils.make_grid(edges_colors, normalize=False, scale_each=True)
                         pred_edge = vutils.make_grid(pred_edges, normalize=False, scale_each=True)
 
 
                         writer.add_image('Images/', img, i_iter)
                         writer.add_image('Labels/', lab, i_iter)
-                        writer.add_image('Edge/', edge, i_iter)
                         writer.add_image('Preds/', pred, i_iter)
                         writer.add_image('Preds_bi/', pred_bi, i_iter)
                         writer.add_image('Pred_edge/', pred_edge, i_iter)
 
-                    msg = 'epoch:%d | l_parse:%.2f l_parse_bi:%.2f l_edge:%.2f l_att:%.2f l_sum:%.2f' % \
+                    msg = 'epoch:%d | l_parse:%.2f l_embd:%.2f' % \
                           (
                               epoch,
                               loss_parse.data.cpu().numpy(),
-                              loss_parse_bi.data.cpu().numpy(),
-                              loss_edge.data.cpu().numpy(),
-                              loss_att_edge.data.cpu().numpy(),
-                              loss.data.cpu().numpy(),
+                              loss_embedding.data.cpu().numpy(),
                           )
                     pbar.set_description(msg)
                     pbar.update(1)

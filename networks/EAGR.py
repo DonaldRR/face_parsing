@@ -187,13 +187,13 @@ class Embedding(nn.Module):
 
         # pixels to anchors non-local attention
         embedding_metric = self.conv_state(embedding).view(n, self.num_s, -1) # (n, T, h * w)
-        regions_embedding = self.priors(embedding_metric) # (n, T, h/s * w/s)
+        regions_embedding = self.priors(embedding_metric.view(n, self.num_s, h, w)).view(n, self.num_s, -1) # (n, T, h/s * w/s)
         corr = torch.matmul(embedding_metric.permute(0, 2, 1), regions_embedding) # (n, h * w, h/s * w/s)
 
         # regions embedding
         embedding_proj = self.conv_proj(embedding) # (n, K, h * w)
         corse_corr = torch.nn.functional.softmax(corr, dim=1).permute(0, 2, 1) # (n, h/s * w/s, h * w)
-        regions_embedding = torch.matmul(corse_corr, embedding_proj) # (n, h/s * w/s, K)
+        regions_embedding = torch.matmul(corse_corr, embedding_proj.view(n, embedding_proj.size(1), -1).permute(0, 2, 1)) # (n, h/s * w/s, K)
         if self.normalize:
             regions_embedding = regions_embedding * (1. / corse_corr.size(2))
         regions_embedding = self.gcn(regions_embedding) # (n, h/s * w/s, K)
@@ -300,7 +300,6 @@ class EAGRNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        input = x
         x = self.relu1(self.bn1(self.conv1(x)))
         x = self.relu2(self.bn2(self.conv2(x)))
         x = self.relu3(self.bn3(self.conv3(x)))
@@ -311,6 +310,8 @@ class EAGRNet(nn.Module):
         x5 = self.layer4(x4) # 60 x 60
         x = self.layer5(x5) # 60 x 60
         #edge,edge_fea = self.edge_layer(x2,x3,x4)
+        import pdb
+        pdb.set_trace()
         deep_embedding = self.block1(x)
         shallow_embedding = self.block2(x2)
         seg, _ = self.layer6(deep_embedding, shallow_embedding)
