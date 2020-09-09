@@ -17,7 +17,7 @@ import torchvision.transforms as transforms
 import timeit
 from tensorboardX import SummaryWriter
 from utils.utils import decode_parsing, inv_preprocess, SingleGPU
-from utils.criterion import CriterionAll, CriterionCrossEntropyEdgeParsing_boundary_attention_loss
+from utils.criterion import CriterionAll, CriterionCrossEntropyEdgeParsing_boundary_attention_loss, DiscriminativeLoss
 from utils.encoding import DataParallelModel, DataParallelCriterion 
 from utils.miou import compute_mean_ioU
 from evaluate import valid
@@ -62,7 +62,7 @@ def get_arguments():
       A list of parsed arguments.
     """
     parser = argparse.ArgumentParser(description="CE2P Network")
-    parser.add_argument("--name", type=str, default='ori_wo_att',
+    parser.add_argument("--name", type=str, default='no_edge',
                         help="Name for the (saved)model")
     parser.add_argument("--pretrained-dir", type=str, default=PRETRAINED_DIR,
                         help="Where the pretrained networks are")
@@ -217,8 +217,11 @@ def main():
     else:
         model = SingleGPU(model)
 
-    criterion = CriterionCrossEntropyEdgeParsing_boundary_attention_loss(loss_weight=[1, 1, 1, 4])
-    criterion.cuda()
+    criterion_CE = CriterionCrossEntropyEdgeParsing_boundary_attention_loss(loss_weight=[1])
+    criterion_CE.cuda()
+
+    criterion_DL = DiscriminativeLoss(11, 0, 0)
+    criterion_DL.cuda()
 
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
@@ -260,15 +263,14 @@ def main():
                 i_iter += len(trainloader) * epoch
                 lr = adjust_learning_rate(optimizer, i_iter, total_iters)
 
-                images, bi_labels, labels, edges, _ = batch
+                images, labels = batch
                 labels = labels.long().cuda()
-                edges = edges.long().cuda()
-                bi_labels = bi_labels.long().cuda()
 
-                preds = model(images)
+                preds, shallow_embedding, deep_embedding = model(images)
 
-                loss_parse, loss_parse_bi, loss_edge, loss_att_edge = criterion(preds, [labels, bi_labels, edges])
-                loss = loss_parse * 2 + loss_edge * 1
+                loss_parse = criterion_CE(preds, [labels])
+                loss_embedding = criterion_DL(shallow_embedding, labels) + criterion_DL(deep_embedding, labels) * 2
+                loss = loss_parse  + loss_embedding
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()

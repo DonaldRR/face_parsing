@@ -85,34 +85,52 @@ class CriterionCrossEntropyEdgeParsing_boundary_attention_loss(nn.Module):
         self.criterion_weight = torch.nn.CrossEntropyLoss(reduction='none', ignore_index=ignore_index) 
         self.loss_weight = loss_weight
           
-    def forward(self, preds, target):
-        # preds: [seg_pred, bi_seg_pred, edge_pred]
-        # target: [seg_label, bi_seg_label, edge_label]
-        h, w = target[0].size(1), target[0].size(2)
+    def forward(self, pred, target):
+        # pred: seg_pred
+        # target: seg_label
+        h, w = target.size(1), target.size(2)
         
-        input_labels = target[2].data.cpu().numpy().astype(np.int64)
-        pos_num = np.sum(input_labels==1).astype(np.float)
-        neg_num = np.sum(input_labels==0).astype(np.float)
-        
-        weight_pos = neg_num/(pos_num+neg_num)
-        weight_neg = pos_num/(pos_num+neg_num)
-        weights = (weight_neg, weight_pos)
-        weights = torch.from_numpy(np.array(weights)).float().cuda()
+        target = target.data.cpu().numpy().astype(np.int64)
+        scale_parse = F.upsample(input=pred, size=(h, w), mode='bilinear') # parsing
+        loss_parse = self.criterion(scale_parse, target)
 
-        edge_p_num = target[2].cpu().numpy().reshape(target[2].size(0),-1).sum(axis=1)
-        edge_p_num = np.tile(edge_p_num, [h, w, 1]).transpose(2,1,0)
-        edge_p_num = torch.from_numpy(edge_p_num).cuda().float()
+        return loss_parse
 
-        scale_parse = F.upsample(input=preds[0], size=(h, w), mode='bilinear') # parsing
-        scale_parse_bi = F.upsample(input=preds[1], size=(h, w), mode='bilinear') # parsing
-        scale_edge = F.upsample(input=preds[2], size=(h, w), mode='bilinear')  # edge
+class DiscriminativeLoss(nn.Module):
 
-        loss_parse = self.criterion(scale_parse, target[0])
-        loss_parse_bi = self.criterion(scale_parse_bi, target[1])
-        loss_edge = F.cross_entropy(scale_edge, target[2], weights)
-        loss_att_edge = self.criterion_weight(scale_parse, target[0]) * target[2].float()
-        loss_att_edge = loss_att_edge / edge_p_num  # only compute the edge pixels
-        loss_att_edge = torch.sum(loss_att_edge) / target[0].size(0)  # mean for batchsize
+    def __init__(self, n_classes, alpha, beta):
+        super(DiscriminativeLoss, self).__init__()
 
-        # print('loss_parse: {}\t loss_edge: {}\t loss_att_edge: {}'.format(loss_parse,loss_edge,loss_att_edge))
-        return loss_parse, loss_parse_bi, loss_edge, loss_att_edge
+        self.n_classes = n_classes
+        self.alpha = alpha
+        self.beta = beta
+
+    def forward(self, embedding, label):
+
+        # embedding: (n, c, h, w)
+        # label: (n, h, w)
+        # alpha: scalar, maximum cluster radius
+        # beta: scalar, minimum inter-cluster radius
+
+        N, C, H, W = embedding.size()
+        one_hot_label = torch.nn.functional.one_hot(label.view(-1), self.n_classes).view(N, H * W, -1).permute(0, 2,
+                                                                                                          1)  # (n, K, h * w)
+        count = one_hot_label.view(N, self.n_classes, -1).sum(2)  # (n, K)
+        mask = (count > 0).int()  # (n, K)
+        one_hot_label = one_hot_label.unsqueeze(2).repeat(1, 1, C, 1)  # (n, K, c, h * w)
+        embedding = embedding.unsqueeze(1).repeat(1, self.n_classes).view(N, self.n_classes, C, -1)  # (n, K, c, h * w)
+        embedding = embedding * one_hot_label
+        embedding = embedding.sum(3)  # (n, K, c)
+        embedding_mean = embedding / (count.unsqueeze(2) + 1)  # (n, K, c)
+        intra_dist = (embedding_mean.unsqueeze(3) - embedding) * one_hot_label  # (n, K, c, h * w)
+        l2_intra_dist = (intra_dist ** 2).mean(2)  # (n, K, h * w)
+        l2_intra_dist = l2_intra_dist.sum(2) / (count + 1)  # (n, K)
+        l2_intra_dist = (l2_intra_dist[:, 1:] * mask[:, 1:]).sum(1) / mask[1:].sum(1)  # (n)
+
+        inter_dist = embedding_mean.unsqueeze(1).repeat(1, self.n_classes) - embedding_mean.unsqueeze(2).repeat(1, 1, self.n_classes)  # (n, K, K, c)
+        l2_inter_dist = (inter_dist ** 2).mean(3)  # (n, K, K)
+        l2_inter_dist = l2_inter_dist * mask.unsqueeze(1).repeat(1, self.n_classes)
+        l2_inter_dist = l2_inter_dist * mask.unsqueeze(2).repeat(1, 1, self.n_classes)
+        l2_inter_dist = l2_inter_dist[:, 1:, 1:].view(N, -1).sum(1) / (mask[1:].sum(1) * mask[1:].sum(1))  # (n)
+
+        return l2_intra_dist - l2_inter_dist

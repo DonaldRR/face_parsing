@@ -165,6 +165,47 @@ class GCN(nn.Module):
         return h
 
 
+class Embedding(nn.Module):
+    def __init__(self, num_in, plane_mid, mids, abn=InPlaceABNSync, normalize=False):
+        super(Embedding, self).__init__()
+
+        self.normalize = normalize
+        self.num_s = int(plane_mid)
+        self.num_n = (mids) * (mids)
+        self.priors = nn.AdaptiveAvgPool2d(output_size=(mids + 2, mids + 2))
+
+        self.conv_state = nn.Conv2d(num_in, self.num_s, kernel_size=1)
+        self.conv_proj = nn.Conv2d(num_in, self.num_s, kernel_size=1)
+        self.gcn = GCN(num_state=self.num_s, num_node=self.num_n)
+        self.conv_extend = nn.Conv2d(self.num_s, num_in, kernel_size=1, bias=False)
+
+        self.blocker = abn(num_in)
+
+    def forward(self, embedding):
+
+        n, c, h, w = embedding.size()
+
+        # pixels to anchors non-local attention
+        embedding_metric = self.conv_state(embedding).view(n, self.num_s, -1) # (n, T, h * w)
+        regions_embedding = self.priors(embedding_metric) # (n, T, h/s * w/s)
+        corr = torch.matmul(embedding_metric.permute(0, 2, 1), regions_embedding) # (n, h * w, h/s * w/s)
+
+        # regions embedding
+        embedding_proj = self.conv_proj(embedding) # (n, K, h * w)
+        corse_corr = torch.nn.functional.softmax(corr, dim=1).permute(0, 2, 1) # (n, h/s * w/s, h * w)
+        regions_embedding = torch.matmul(corse_corr, embedding_proj) # (n, h/s * w/s, K)
+        if self.normalize:
+            regions_embedding = regions_embedding * (1. / corse_corr.size(2))
+        regions_embedding = self.gcn(regions_embedding) # (n, h/s * w/s, K)
+
+        # pixels embedding
+        fine_corr = torch.nn.functional.softmax(corr, dim=2) # (n, h * w, h/s * w/s)
+        pixels_embedding = torch.matmul(fine_corr, regions_embedding)
+        out = embedding + self.blocker(self.conv_extend(pixels_embedding))
+
+        return out
+
+
 class EAGRModule(nn.Module):
     def __init__(self, num_in, plane_mid, mids, abn=InPlaceABNSync, normalize=False):
         super(EAGRModule, self).__init__()
@@ -210,6 +251,7 @@ class EAGRModule(nn.Module):
 
         return out
 
+
 class EAGRNet(nn.Module):
     def __init__(self, num_classes, abn = InPlaceABNSync):
         self.inplanes = 128
@@ -234,11 +276,11 @@ class EAGRNet(nn.Module):
         self.layer3 = self._make_layer(Bottleneck, 256, self.layers[2], stride=strides[2], dilation=dilations[2])
         self.layer4 = self._make_layer(Bottleneck, 512, self.layers[3], stride=strides[3], dilation=dilations[3], multi_grid=(1,1,1))
         self.layer5 = PSPModule(2048,512,abn)
-        self.edge_layer = Edge_Module(abn)
-        self.block1 = EAGRModule(512, 128, 4, abn)
-        self.block2 = EAGRModule(256, 64, 4, abn)
+        #self.edge_layer = Edge_Module(abn)
+        self.block1 = Embedding(512, 128, 4, abn)
+        self.block2 = Embedding(256, 64, 4, abn)
         self.layer6 = Decoder_Module(512, 256, num_classes, abn)
-        self.layer7 = Decoder_Module(512, 256, 2, abn)
+        #self.layer7 = Decoder_Module(512, 256, 2, abn)
 
     def _make_layer(self, block, planes, blocks, stride=1, dilation=1, multi_grid=1):
         downsample = None
@@ -268,11 +310,11 @@ class EAGRNet(nn.Module):
         x4 = self.layer3(x3) # 60 x 60
         x5 = self.layer4(x4) # 60 x 60
         x = self.layer5(x5) # 60 x 60
-        edge,edge_fea = self.edge_layer(x2,x3,x4)
-        x = self.block1(x, edge.detach())
-        x2 = self.block2(x2, edge.detach())
-        seg, _ = self.layer6(x, x2)
-        seg_bi, _ = self.layer7(x, x2)
+        #edge,edge_fea = self.edge_layer(x2,x3,x4)
+        deep_embedding = self.block1(x)
+        shallow_embedding = self.block2(x2)
+        seg, _ = self.layer6(deep_embedding, shallow_embedding)
+        # seg_bi, _ = self.layer7(x, x2)
     
-        return seg, seg_bi, edge
+        return seg, shallow_embedding, deep_embedding
 

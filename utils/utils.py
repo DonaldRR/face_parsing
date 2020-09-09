@@ -17,6 +17,8 @@ COLORS = [(0,0,0)
                 # 16=potted plant, 17=sheep, 18=sofa, 19=train, 20=tv/monitor
 
 
+
+
 def decode_parsing(labels, num_images=1, num_classes=21, is_pred=False):
     """Decode batch of segmentation masks.
     
