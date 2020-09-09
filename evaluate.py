@@ -100,15 +100,18 @@ def valid(model, valloader, input_size, num_samples, dir=None):
             ConfMat_parsing_bi += compute_confusion_matrix(parse_to_label(pred_parsing_bi, interp), bi_label, pred_parsing_bi.size(1))
             ConfMat_edge += compute_confusion_matrix(parse_to_label(pred_edge, interp), edge, pred_edge.size(1))
 
+            if dir:
+                pass
+
     def compute_mIoU_f1(m):
         n_class = len(m)
         mIoUs = []
         f1s = []
         for i in range(n_class):
-            intersection = m[i][i]
-            row_sum = np.sum(m[i, :])
-            col_sum = np.sum(m[:, i])
-            f1s.append(2 * (row_sum / intersection + col_sum / intersection))
+            intersection = m[i][i] + 1
+            row_sum = np.sum(m[i, :]) + n_class
+            col_sum = np.sum(m[:, i]) + n_class
+            f1s.append(2 / (row_sum / intersection + col_sum / intersection))
             mIoUs.append(intersection / (row_sum + col_sum - intersection))
 
         return mIoUs, f1s

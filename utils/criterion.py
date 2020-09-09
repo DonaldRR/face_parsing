@@ -90,13 +90,13 @@ class CriterionCrossEntropyEdgeParsing_boundary_attention_loss(nn.Module):
         # target: [seg_label, bi_seg_label, edge_label]
         h, w = target[0].size(1), target[0].size(2)
         
-        input_labels = target[1].data.cpu().numpy().astype(np.int64)
+        input_labels = target[2].data.cpu().numpy().astype(np.int64)
         pos_num = np.sum(input_labels==1).astype(np.float)
         neg_num = np.sum(input_labels==0).astype(np.float)
         
         weight_pos = neg_num/(pos_num+neg_num)
         weight_neg = pos_num/(pos_num+neg_num)
-        weights = (weight_neg, weight_pos)  
+        weights = (weight_neg, weight_pos)
         weights = torch.from_numpy(np.array(weights)).float().cuda()
 
         edge_p_num = target[2].cpu().numpy().reshape(target[2].size(0),-1).sum(axis=1)

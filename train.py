@@ -33,14 +33,15 @@ start = timeit.default_timer()
 BATCH_SIZE = 8
 DATA_DIRECTORY = './dataset/Helen'
 IGNORE_LABEL = 255
-INPUT_SIZE = '128,128'
+INPUT_SIZE = '256,256'
 LEARNING_RATE = 1e-3
 MOMENTUM = 0.9
 NUM_CLASSES = 11
 POWER = 0.9
 RANDOM_SEED = 1234
-RESTORE_FROM = './snapshots/resnet101-imagenet.pth'
-SAVE_NUM_IMAGES = 2
+RESTORE_FROM = './backbones/resnet101-imagenet.pth'
+PRETRAINED_DIR = './backbones'
+SAVE_NUM_IMAGES = BATCH_SIZE
 SAVE_PRED_EVERY = 10000
 SNAPSHOT_DIR = './snapshots/'
 WEIGHT_DECAY = 0.0005
@@ -61,6 +62,10 @@ def get_arguments():
       A list of parsed arguments.
     """
     parser = argparse.ArgumentParser(description="CE2P Network")
+    parser.add_argument("--name", type=str, default='ori_wo_att',
+                        help="Name for the (saved)model")
+    parser.add_argument("--pretrained-dir", type=str, default=PRETRAINED_DIR,
+                        help="Where the pretrained networks are")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE,
                         help="Number of images sent to the network in one step.")
     parser.add_argument("--data-dir", type=str, default=DATA_DIRECTORY,
@@ -160,6 +165,10 @@ def main():
 
     if not os.path.exists(args.snapshot_dir):
         os.makedirs(args.snapshot_dir)
+    save_dir = os.path.join(args.snapshot_dir, args.name)
+    if os.path.exists(save_dir):
+        os.system('rm -r %s' % save_dir)
+    os.mkdir(save_dir)
 
     h, w = map(int, args.input_size.split(','))
     input_size = [h, w]
@@ -177,7 +186,7 @@ def main():
         dist.init_process_group(backend=args.dist_backend, init_method='env://')
     rank = 0 if not distributed else dist.get_rank()
 
-    writer = SummaryWriter(osp.join(args.snapshot_dir, TIMESTAMP)) if rank == 0 else None
+    writer = SummaryWriter(osp.join(args.snapshot_dir, args.name)) if rank == 0 else None
 
     cudnn.enabled = True
     # cudnn related setting
@@ -192,7 +201,7 @@ def main():
     if args.restore_from is not None:
         model.load_state_dict(torch.load(args.restore_from), True)
     else:
-        resnet_params = torch.load(os.path.join(args.snapshot_dir, 'resnet101-imagenet.pth'))
+        resnet_params = torch.load(os.path.join(args.pretrained_dir, 'resnet101-imagenet.pth'))
         new_params = model.state_dict().copy()
         for i in resnet_params:
             i_parts = i.split('.')
@@ -241,6 +250,7 @@ def main():
     optimizer.zero_grad()
 
     total_iters = args.epochs * len(trainloader)
+    n_viz_iters = len(trainloader) // 2
     with tqdm.tqdm(total=total_iters, position=0) as pbar:
         for epoch in range(args.start_epoch, args.epochs):
             model.train()
@@ -258,7 +268,7 @@ def main():
                 preds = model(images)
 
                 loss_parse, loss_parse_bi, loss_edge, loss_att_edge = criterion(preds, [labels, bi_labels, edges])
-                loss = loss_parse * 1 + loss_parse_bi * 1 + loss_att_edge * 1 + loss_att_edge * 4
+                loss = loss_parse * 2 + loss_edge * 1
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -272,11 +282,11 @@ def main():
                     loss /= count.item()
 
                 if not dist.is_initialized() or dist.get_rank() == 0:
-                    if i_iter % 50 == 0:
+                    if i_iter % (n_viz_iters // 5) == 0:
                         writer.add_scalar('learning_rate', lr, i_iter)
                         writer.add_scalar('loss', loss.data.cpu().numpy(), i_iter)
 
-                    if i_iter % 500 == 0:
+                    if i_iter % n_viz_iters == 0:
 
                         images_inv = inv_preprocess(images, args.save_num_images)
                         labels_colors = decode_parsing(labels, args.save_num_images, args.num_classes, is_pred=False)
@@ -285,19 +295,22 @@ def main():
                         if isinstance(preds, list):
                             preds = preds[0]
                         preds_colors = decode_parsing(preds[0], args.save_num_images, args.num_classes, is_pred=True)
-                        pred_edges = decode_parsing(preds[1], args.save_num_images, 2, is_pred=True)
+                        preds_colors_bi = decode_parsing(preds[1], args.save_num_images, 2, is_pred=True)
+                        pred_edges = decode_parsing(preds[2], args.save_num_images, 2, is_pred=True)
 
                         img = vutils.make_grid(images_inv, normalize=False, scale_each=True)
                         lab = vutils.make_grid(labels_colors, normalize=False, scale_each=True)
                         pred = vutils.make_grid(preds_colors, normalize=False, scale_each=True)
+                        pred_bi = vutils.make_grid(preds_colors_bi, normalize=False, scale_each=True)
                         edge = vutils.make_grid(edges_colors, normalize=False, scale_each=True)
                         pred_edge = vutils.make_grid(pred_edges, normalize=False, scale_each=True)
 
 
                         writer.add_image('Images/', img, i_iter)
                         writer.add_image('Labels/', lab, i_iter)
-                        writer.add_image('Preds/', pred, i_iter)
                         writer.add_image('Edge/', edge, i_iter)
+                        writer.add_image('Preds/', pred, i_iter)
+                        writer.add_image('Preds_bi/', pred_bi, i_iter)
                         writer.add_image('Pred_edge/', pred_edge, i_iter)
 
                     msg = 'epoch:%d | l_parse:%.2f l_parse_bi:%.2f l_edge:%.2f l_att:%.2f l_sum:%.2f' % \
@@ -313,22 +326,20 @@ def main():
                     pbar.update(1)
                     #print('iter = {} of {} completed, loss = {}'.format(i_iter, total_iters, loss.data.cpu().numpy()))
             if not dist.is_initialized() or dist.get_rank() == 0:
-                torch.save(model.module.state_dict(), osp.join(args.snapshot_dir, TIMESTAMP, 'epoch_' + str(epoch) + '.pth'))
+                torch.save(model.module.state_dict(), osp.join(args.snapshot_dir, args.name, 'epoch_' + str(epoch) + '.pth'))
 
                 if epoch % args.test_fre == 0:
                     valid_dict = valid(model, valloader, input_size, num_samples)
-                    #preds_parsing, preds_parsing_bi, preds_edge, scales, centers = valid(model, valloader, input_size, num_samples)
-                    #parsing_mIoU, parsing_f1 = compute_mean_ioU(preds_parsing, scales, centers, 11, args.data_dir, input_size, 'test', True)
-                    #parsing_bi_mIoU, parsing_bi_f1 = compute_mean_ioU(preds_parsing_bi, scales, centers, 2, args.data_dir, input_size, 'test', True)
-                    #edge_mIoU, edge_f1 = compute_mean_ioU(preds_edge, scales, centers, 2, args.data_dir, input_size, 'test', True)
-                    #if f1['overall'] > best_f1:
-                    #    torch.save(model.module.state_dict(), osp.join(args.snapshot_dir, TIMESTAMP, 'best.pth'))
-                    #    best_f1 = f1['overall']
                     def write_tf(prefix, arr, epoch, writer):
                         for i, value in enumerate(arr):
                             writer.add_scalar(prefix+'_%d' % i, value, epoch)
 
                     for semantic_name, semantic_ret in valid_dict.items():
+                        mean_mIoU = np.average(semantic_ret['mIoU'][1:])
+                        mean_f1 = np.average(semantic_ret['f1'][1:])
+                        writer.add_scalar(semantic_name+'_mean_mIoU', mean_mIoU, epoch)
+                        writer.add_scalar(semantic_name+'_mean_f1', mean_f1, epoch)
+                        print('Epoch %d | %s @ mean_mIoU=%.4f mean_f1=%.4f' % (epoch, semantic_name, mean_mIoU, mean_f1))
                         write_tf(semantic_name + '_mIoU', semantic_ret['mIoU'], epoch, writer)
                         write_tf(semantic_name + '_f1', semantic_ret['f1'], epoch, writer)
 
