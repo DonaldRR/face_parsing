@@ -238,7 +238,6 @@ class EAGRNet(nn.Module):
         self.block1 = EAGRModule(512, 128, 4, abn)
         self.block2 = EAGRModule(256, 64, 4, abn)
         self.layer6 = Decoder_Module(512, 256, num_classes, abn)
-        self.layer7 = Decoder_Module(512, 256, 2, abn)
 
     def _make_layer(self, block, planes, blocks, stride=1, dilation=1, multi_grid=1):
         downsample = None
@@ -272,7 +271,6 @@ class EAGRNet(nn.Module):
         x = self.block1(x, edge.detach())
         x2 = self.block2(x2, edge.detach())
         seg, _ = self.layer6(x, x2)
-        seg_bi, _ = self.layer7(x, x2)
-    
-        return seg, seg_bi, edge
+
+        return seg, edge
 

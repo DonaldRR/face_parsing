@@ -30,10 +30,10 @@ import matplotlib.pyplot as plt
 
 start = timeit.default_timer()
   
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 DATA_DIRECTORY = './dataset/Helen'
 IGNORE_LABEL = 255
-INPUT_SIZE = '256,256'
+INPUT_SIZE = '473,473'
 LEARNING_RATE = 1e-3
 MOMENTUM = 0.9
 NUM_CLASSES = 11
@@ -267,7 +267,7 @@ def main():
 
                 preds = model(images)
 
-                loss_parse, loss_parse_bi, loss_edge, loss_att_edge = criterion(preds, [labels, bi_labels, edges])
+                loss_parse, loss_edge, loss_att_edge = criterion(preds, [labels, edges])
                 loss = loss_parse * 2 + loss_edge * 1
                 optimizer.zero_grad()
                 loss.backward()
@@ -295,13 +295,11 @@ def main():
                         if isinstance(preds, list):
                             preds = preds[0]
                         preds_colors = decode_parsing(preds[0], args.save_num_images, args.num_classes, is_pred=True)
-                        preds_colors_bi = decode_parsing(preds[1], args.save_num_images, 2, is_pred=True)
-                        pred_edges = decode_parsing(preds[2], args.save_num_images, 2, is_pred=True)
+                        pred_edges = decode_parsing(preds[1], args.save_num_images, 2, is_pred=True)
 
                         img = vutils.make_grid(images_inv, normalize=False, scale_each=True)
                         lab = vutils.make_grid(labels_colors, normalize=False, scale_each=True)
                         pred = vutils.make_grid(preds_colors, normalize=False, scale_each=True)
-                        pred_bi = vutils.make_grid(preds_colors_bi, normalize=False, scale_each=True)
                         edge = vutils.make_grid(edges_colors, normalize=False, scale_each=True)
                         pred_edge = vutils.make_grid(pred_edges, normalize=False, scale_each=True)
 
@@ -310,14 +308,12 @@ def main():
                         writer.add_image('Labels/', lab, i_iter)
                         writer.add_image('Edge/', edge, i_iter)
                         writer.add_image('Preds/', pred, i_iter)
-                        writer.add_image('Preds_bi/', pred_bi, i_iter)
                         writer.add_image('Pred_edge/', pred_edge, i_iter)
 
-                    msg = 'epoch:%d | l_parse:%.2f l_parse_bi:%.2f l_edge:%.2f l_att:%.2f l_sum:%.2f' % \
+                    msg = 'epoch:%d | l_parse:%.2f l_edge:%.2f l_att:%.2f l_sum:%.2f' % \
                           (
                               epoch,
                               loss_parse.data.cpu().numpy(),
-                              loss_parse_bi.data.cpu().numpy(),
                               loss_edge.data.cpu().numpy(),
                               loss_att_edge.data.cpu().numpy(),
                               loss.data.cpu().numpy(),

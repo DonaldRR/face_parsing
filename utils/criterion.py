@@ -90,7 +90,7 @@ class CriterionCrossEntropyEdgeParsing_boundary_attention_loss(nn.Module):
         # target: [seg_label, bi_seg_label, edge_label]
         h, w = target[0].size(1), target[0].size(2)
         
-        input_labels = target[2].data.cpu().numpy().astype(np.int64)
+        input_labels = target[1].data.cpu().numpy().astype(np.int64)
         pos_num = np.sum(input_labels==1).astype(np.float)
         neg_num = np.sum(input_labels==0).astype(np.float)
         
@@ -99,20 +99,18 @@ class CriterionCrossEntropyEdgeParsing_boundary_attention_loss(nn.Module):
         weights = (weight_neg, weight_pos)
         weights = torch.from_numpy(np.array(weights)).float().cuda()
 
-        edge_p_num = target[2].cpu().numpy().reshape(target[2].size(0),-1).sum(axis=1)
+        edge_p_num = target[1].cpu().numpy().reshape(target[1].size(0),-1).sum(axis=1)
         edge_p_num = np.tile(edge_p_num, [h, w, 1]).transpose(2,1,0)
         edge_p_num = torch.from_numpy(edge_p_num).cuda().float()
 
         scale_parse = F.upsample(input=preds[0], size=(h, w), mode='bilinear') # parsing
-        scale_parse_bi = F.upsample(input=preds[1], size=(h, w), mode='bilinear') # parsing
-        scale_edge = F.upsample(input=preds[2], size=(h, w), mode='bilinear')  # edge
+        scale_edge = F.upsample(input=preds[1], size=(h, w), mode='bilinear')  # edge
 
         loss_parse = self.criterion(scale_parse, target[0])
-        loss_parse_bi = self.criterion(scale_parse_bi, target[1])
-        loss_edge = F.cross_entropy(scale_edge, target[2], weights)
-        loss_att_edge = self.criterion_weight(scale_parse, target[0]) * target[2].float()
+        loss_edge = F.cross_entropy(scale_edge, target[1], weights)
+        loss_att_edge = self.criterion_weight(scale_parse, target[0]) * target[1].float()
         loss_att_edge = loss_att_edge / edge_p_num  # only compute the edge pixels
         loss_att_edge = torch.sum(loss_att_edge) / target[0].size(0)  # mean for batchsize
 
         # print('loss_parse: {}\t loss_edge: {}\t loss_att_edge: {}'.format(loss_parse,loss_edge,loss_att_edge))
-        return loss_parse, loss_parse_bi, loss_edge, loss_att_edge
+        return loss_parse, loss_edge, loss_att_edge
