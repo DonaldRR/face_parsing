@@ -105,19 +105,26 @@ def valid(model, valloader, input_size, num_samples, dir=None):
         n_class = len(m)
         mIoUs = []
         f1s = []
+        recalls = []
+        precisions = []
         for i in range(n_class):
             intersection = m[i][i] + 1
-            row_sum = np.sum(m[i, :]) + n_class
-            col_sum = np.sum(m[:, i]) + n_class
-            f1s.append(2 / (row_sum / intersection + col_sum / intersection))
-            mIoUs.append(intersection / (row_sum + col_sum - intersection))
+            n_true = np.sum(m[i, :]) + n_class
+            n_pos = np.sum(m[:, i]) + n_class
+            recall = intersection / n_true
+            precision = intersection / n_pos
+            recalls.append(recall)
+            precisions.append(precision)
+            f1s.append(2 / (1 / recall + 1 / precision))
+            mIoUs.append(intersection / (n_true + n_pos - intersection))
 
-        return mIoUs, f1s
+        return mIoUs, f1s, recalls, precisions
 
-    parsing_mIoUs, parsing_f1s = compute_mIoU_f1(ConfMat_parsing)
+    parsing_mIoUs, parsing_f1s, parsing_recalls, parsing_precisions = compute_mIoU_f1(ConfMat_parsing)
+    parsing_mean_accuracy = np.diag(ConfMat_parsing).sum() / ConfMat_parsing.sum()
 
     return {
-        'parsing': {'mIoU': parsing_mIoUs, 'f1': parsing_f1s},
+        'parsing': {'mIoU': parsing_mIoUs, 'f1': parsing_f1s, 'recalls': parsing_recalls, 'precisions': parsing_precisions, 'mean_accuracy': parsing_mean_accuracy},
     }
 
 
