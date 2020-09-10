@@ -66,7 +66,6 @@ def valid(model, valloader, input_size, num_samples, dir=None):
     centers = np.zeros((num_samples, 2), dtype=np.int32)
 
     ConfMat_parsing = np.zeros((11, 11))
-    ConfMat_parsing_bi = np.zeros((2, 2))
     ConfMat_edge = np.zeros((2, 2))
 
     idx = 0
@@ -83,7 +82,7 @@ def valid(model, valloader, input_size, num_samples, dir=None):
             scales[idx:idx + num_images, :] = s[:, :]
             centers[idx:idx + num_images, :] = c[:, :]
 
-            pred_parsing, pred_parsing_bi, pred_edge = model(image.cuda())
+            pred_parsing, pred_edge = model(image.cuda())
 
             def parse_to_label(pred, iterp_func):
 
@@ -97,7 +96,6 @@ def valid(model, valloader, input_size, num_samples, dir=None):
 #            preds_edge[idx:idx + num_images, :, :] = parse_to_label(pred_edge, interp)
 #            idx += num_images
             ConfMat_parsing += compute_confusion_matrix(parse_to_label(pred_parsing, interp), label, pred_parsing.size(1))
-            ConfMat_parsing_bi += compute_confusion_matrix(parse_to_label(pred_parsing_bi, interp), bi_label, pred_parsing_bi.size(1))
             ConfMat_edge += compute_confusion_matrix(parse_to_label(pred_edge, interp), edge, pred_edge.size(1))
 
             if dir:
@@ -107,23 +105,29 @@ def valid(model, valloader, input_size, num_samples, dir=None):
         n_class = len(m)
         mIoUs = []
         f1s = []
+        recalls = []
+        precisions = []
         for i in range(n_class):
             intersection = m[i][i] + 1
-            row_sum = np.sum(m[i, :]) + n_class
-            col_sum = np.sum(m[:, i]) + n_class
-            f1s.append(2 / (row_sum / intersection + col_sum / intersection))
-            mIoUs.append(intersection / (row_sum + col_sum - intersection))
+            n_true = np.sum(m[i, :]) + n_class
+            n_pos = np.sum(m[:, i]) + n_class
+            recall = intersection / n_true
+            precision = intersection / n_pos
+            recalls.append(recall)
+            precisions.append(precision)
+            f1s.append(2 / (1 / recall + 1 / precision))
+            mIoUs.append(intersection / (n_true + n_pos - intersection))
 
-        return mIoUs, f1s
+        return mIoUs, f1s, recalls, precisions
 
-    parsing_mIoUs, parsing_f1s = compute_mIoU_f1(ConfMat_parsing)
-    parsing_bi_mIoUs, parsing_bi_f1s = compute_mIoU_f1(ConfMat_parsing_bi)
-    edge_mIoUs, edge_f1s = compute_mIoU_f1(ConfMat_edge)
+    parsing_mIoUs, parsing_f1s, parsing_recalls, parsing_precisions = compute_mIoU_f1(ConfMat_parsing)
+    parsing_mean_accuracy = np.diag(ConfMat_parsing).sum() / ConfMat_parsing.sum()
+    edge_mIoUs, edge_f1s, edge_recalls, edge_precisions = compute_mIoU_f1(ConfMat_edge)
+    edge_mean_accuracy = np.diag(ConfMat_edge).sum() / ConfMat_edge.sum()
 
     return {
-        'parsing': {'mIoU': parsing_mIoUs, 'f1': parsing_f1s},
-        'parsing_bi': {'mIoU': parsing_bi_mIoUs, 'f1': parsing_bi_f1s},
-        'edge': {'mIoU': edge_mIoUs, 'f1': edge_f1s}
+        'parsing': {'mIoU': parsing_mIoUs, 'f1': parsing_f1s, 'recalls': parsing_recalls, 'precisions': parsing_precisions, 'mean_accuracy': parsing_mean_accuracy},
+        'edge': {'mIoU': edge_mIoUs, 'f1': edge_f1s, 'recalls': edge_recalls, 'precisions': edge_precisions, 'mean_accuracy': edge_mean_accuracy}
     }
 
 

@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 
 start = timeit.default_timer()
   
-BATCH_SIZE = 4
+BATCH_SIZE = 3
 DATA_DIRECTORY = './dataset/Helen'
 IGNORE_LABEL = 255
 INPUT_SIZE = '473,473'
@@ -62,7 +62,7 @@ def get_arguments():
       A list of parsed arguments.
     """
     parser = argparse.ArgumentParser(description="CE2P Network")
-    parser.add_argument("--name", type=str, default='ori_wo_att',
+    parser.add_argument("--name", type=str, default='baseline',
                         help="Name for the (saved)model")
     parser.add_argument("--pretrained-dir", type=str, default=PRETRAINED_DIR,
                         help="Where the pretrained networks are")
@@ -268,7 +268,7 @@ def main():
                 preds = model(images)
 
                 loss_parse, loss_edge, loss_att_edge = criterion(preds, [labels, edges])
-                loss = loss_parse * 2 + loss_edge * 1
+                loss = loss_parse * 1 + loss_edge * 1 + loss_att_edge * 4
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -328,16 +328,25 @@ def main():
                     valid_dict = valid(model, valloader, input_size, num_samples)
                     def write_tf(prefix, arr, epoch, writer):
                         for i, value in enumerate(arr):
-                            writer.add_scalar(prefix+'_%d' % i, value, epoch)
+                            writer.add_scalar(prefix+'/%d' % i, value, epoch)
 
                     for semantic_name, semantic_ret in valid_dict.items():
-                        mean_mIoU = np.average(semantic_ret['mIoU'][1:])
-                        mean_f1 = np.average(semantic_ret['f1'][1:])
-                        writer.add_scalar(semantic_name+'_mean_mIoU', mean_mIoU, epoch)
-                        writer.add_scalar(semantic_name+'_mean_f1', mean_f1, epoch)
-                        print('Epoch %d | %s @ mean_mIoU=%.4f mean_f1=%.4f' % (epoch, semantic_name, mean_mIoU, mean_f1))
-                        write_tf(semantic_name + '_mIoU', semantic_ret['mIoU'], epoch, writer)
-                        write_tf(semantic_name + '_f1', semantic_ret['f1'], epoch, writer)
+                        for metric_name, metric_values in semantic_ret.items():
+                            if isinstance(metric_values, list):
+                                write_tf(semantic_name+'_'+metric_name, metric_values, epoch, writer)
+                            else:
+                                writer.add_scalar(semantic_name+'_'+metric_name, metric_values, epoch)
+                        mean_mIoU_wo_bg = np.average(semantic_ret['mIoU'][1:])
+                        mean_f1_wo_bg = np.average(semantic_ret['f1'][1:])
+                        mean_mIoU = np.average(semantic_ret['mIoU'])
+                        mean_f1 = np.average(semantic_ret['f1'])
+                        writer.add_scalar(semantic_name+'_mean_mIoU/with_bg', mean_mIoU, epoch)
+                        writer.add_scalar(semantic_name+'_mean_mIoU/wo_bg', mean_mIoU_wo_bg, epoch)
+                        writer.add_scalar(semantic_name+'_mean_f1/with_bg', mean_f1, epoch)
+                        writer.add_scalar(semantic_name+'_mean_f1/wo_bg', mean_f1_wo_bg, epoch)
+                        writer.add_scalar(semantic_name+'_'+'mean_acc', semantic_ret['mean_accuracy'], epoch)
+                        print('Epoch %d | %s \n\tmean_mIoU=%.4f \tmean_f1=%.4f \tmean_mIoU_wo_bg:%.4f \tmean_f1_wo_bg:%.4f \tmean_accuracy:%.4f' %
+                              (epoch, semantic_name, mean_mIoU, mean_f1, mean_mIoU_wo_bg, mean_f1_wo_bg, semantic_ret['mean_accuracy']))
 
 
     end = timeit.default_timer()
