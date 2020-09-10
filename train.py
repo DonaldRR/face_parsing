@@ -16,7 +16,7 @@ from dataset.datasets import HelenDataSet
 import torchvision.transforms as transforms
 import timeit
 from tensorboardX import SummaryWriter
-from utils.utils import decode_parsing, inv_preprocess, SingleGPU
+from utils.utils import decode_parsing, inv_preprocess, SingleGPU, vis_embedding
 from utils.criterion import CriterionAll, CriterionCrossEntropyEdgeParsing_boundary_attention_loss, DiscriminativeLoss
 from utils.encoding import DataParallelModel, DataParallelCriterion 
 from utils.miou import compute_mean_ioU
@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 
 start = timeit.default_timer()
   
-BATCH_SIZE = 8
+BATCH_SIZE = 6
 DATA_DIRECTORY = './dataset/Helen'
 IGNORE_LABEL = 255
 INPUT_SIZE = '256,256'
@@ -220,7 +220,7 @@ def main():
     criterion_CE = CriterionCrossEntropyEdgeParsing_boundary_attention_loss(loss_weight=[1])
     criterion_CE.cuda()
 
-    criterion_DL = DiscriminativeLoss(11, 0, 0)
+    criterion_DL = DiscriminativeLoss(11)
     criterion_DL.cuda()
 
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -254,90 +254,97 @@ def main():
 
     total_iters = args.epochs * len(trainloader)
     n_viz_iters = len(trainloader) // 2
-    with tqdm.tqdm(total=total_iters, position=0) as pbar:
-        for epoch in range(args.start_epoch, args.epochs):
-            model.train()
-            if distributed:
-                train_sampler.set_epoch(epoch)
-            for i_iter, batch in enumerate(trainloader):
-                i_iter += len(trainloader) * epoch
-                lr = adjust_learning_rate(optimizer, i_iter, total_iters)
+    with torch.autograd.set_detect_anomaly(True):
+        with tqdm.tqdm(total=total_iters, position=0) as pbar:
+            for epoch in range(args.start_epoch, args.epochs):
+                model.train()
+                if distributed:
+                    train_sampler.set_epoch(epoch)
+                for i_iter, batch in enumerate(trainloader):
+                    i_iter += len(trainloader) * epoch
+                    lr = adjust_learning_rate(optimizer, i_iter, total_iters)
 
-                images, labels, _ = batch
-                labels = labels.long().cuda()
+                    images, labels, labels1, _ = batch
+                    labels = labels.long().cuda()
+                    labels1 = labels1.long().cuda()
 
-                preds, shallow_embedding, deep_embedding = model(images)
+                    preds, shallow_embedding, deep_embedding = model(images)
 
-                loss_parse = criterion_CE(preds, [labels])
-                loss_embedding = criterion_DL(shallow_embedding, labels) + criterion_DL(deep_embedding, labels) * 2
-                loss = loss_parse  + loss_embedding
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                    loss_parse = criterion_CE(preds, labels)
+                    loss_intra_s, loss_inter_s = criterion_DL(shallow_embedding, labels1)
+                    loss_intra_d, loss_inter_d = criterion_DL(deep_embedding, labels1)
+                    loss = loss_parse * 2 + loss_intra_s * .5 + loss_intra_d * .5+ loss_inter_s * .5 + loss_inter_d * .5
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
 
-                with torch.no_grad():
-                    loss = loss.detach() * labels.shape[0]
-                    count = labels.new_tensor([labels.shape[0]], dtype=torch.long)
-                    if dist.is_initialized():
-                        dist.all_reduce(count, dist.ReduceOp.SUM)
-                        dist.all_reduce(loss, dist.ReduceOp.SUM)
-                    loss /= count.item()
+                    with torch.no_grad():
+                        loss = loss.detach() * labels.shape[0]
+                        count = labels.new_tensor([labels.shape[0]], dtype=torch.long)
+                        if dist.is_initialized():
+                            dist.all_reduce(count, dist.ReduceOp.SUM)
+                            dist.all_reduce(loss, dist.ReduceOp.SUM)
+                        loss /= count.item()
 
+                    if not dist.is_initialized() or dist.get_rank() == 0:
+                        if i_iter % (n_viz_iters // 5) == 0:
+                            writer.add_scalar('learning_rate', lr, i_iter)
+                            writer.add_scalar('loss', loss.data.cpu().numpy(), i_iter)
+
+                        if i_iter % n_viz_iters == 0:
+
+                            images_inv = inv_preprocess(images, args.save_num_images)
+                            labels_colors = decode_parsing(labels, args.save_num_images, args.num_classes, is_pred=False)
+
+                            if isinstance(preds, list):
+                                preds = preds[0]
+                            preds_colors = decode_parsing(preds, args.save_num_images, args.num_classes, is_pred=True)
+                            shallow_embedding_colors = vis_embedding(shallow_embedding)
+                            deep_embedding_colors = vis_embedding(deep_embedding)
+
+                            img = vutils.make_grid(images_inv, normalize=False, scale_each=True)
+                            lab = vutils.make_grid(labels_colors, normalize=False, scale_each=True)
+                            pred = vutils.make_grid(preds_colors, normalize=False, scale_each=True)
+                            shallow_embedding = vutils.make_grid(shallow_embedding_colors, normalize=False, scale_each=True)
+                            deep_embedding = vutils.make_grid(deep_embedding_colors, normalize=False, scale_each=True)
+
+
+                            writer.add_image('Images/', img, i_iter)
+                            writer.add_image('Labels/', lab, i_iter)
+                            writer.add_image('Preds/', pred, i_iter)
+                            writer.add_image('Embd1/', shallow_embedding, i_iter)
+                            writer.add_image('Embd2/', deep_embedding, i_iter)
+
+                        msg = 'epoch:%d | l_parse:%.2f l_intra_s:%.2f l_inter_s:%.2f l_intra_d:%.2f l_inter_d:%.2f l_sum:%.2f' % \
+                              (
+                                  epoch,
+                                  loss_parse.data.cpu().numpy(),
+                                  loss_intra_s.data.cpu().numpy(),
+                                  loss_inter_s.data.cpu().numpy(),
+                                  loss_intra_d.data.cpu().numpy(),
+                                  loss_inter_d.data.cpu().numpy(),
+                                  loss.data.cpu().numpy()
+                              )
+                        pbar.set_description(msg)
+                        pbar.update(1)
+                        #print('iter = {} of {} completed, loss = {}'.format(i_iter, total_iters, loss.data.cpu().numpy()))
                 if not dist.is_initialized() or dist.get_rank() == 0:
-                    if i_iter % (n_viz_iters // 5) == 0:
-                        writer.add_scalar('learning_rate', lr, i_iter)
-                        writer.add_scalar('loss', loss.data.cpu().numpy(), i_iter)
+                    torch.save(model.module.state_dict(), osp.join(args.snapshot_dir, args.name, 'epoch_' + str(epoch) + '.pth'))
 
-                    if i_iter % n_viz_iters == 0:
+                    if epoch % args.test_fre == 0:
+                        valid_dict = valid(model, valloader, input_size, num_samples)
+                        def write_tf(prefix, arr, epoch, writer):
+                            for i, value in enumerate(arr):
+                                writer.add_scalar(prefix+'_%d' % i, value, epoch)
 
-                        images_inv = inv_preprocess(images, args.save_num_images)
-                        labels_colors = decode_parsing(labels, args.save_num_images, args.num_classes, is_pred=False)
-
-                        if isinstance(preds, list):
-                            preds = preds[0]
-                        preds_colors = decode_parsing(preds[0], args.save_num_images, args.num_classes, is_pred=True)
-                        preds_colors_bi = decode_parsing(preds[1], args.save_num_images, 2, is_pred=True)
-                        pred_edges = decode_parsing(preds[2], args.save_num_images, 2, is_pred=True)
-
-                        img = vutils.make_grid(images_inv, normalize=False, scale_each=True)
-                        lab = vutils.make_grid(labels_colors, normalize=False, scale_each=True)
-                        pred = vutils.make_grid(preds_colors, normalize=False, scale_each=True)
-                        pred_bi = vutils.make_grid(preds_colors_bi, normalize=False, scale_each=True)
-                        pred_edge = vutils.make_grid(pred_edges, normalize=False, scale_each=True)
-
-
-                        writer.add_image('Images/', img, i_iter)
-                        writer.add_image('Labels/', lab, i_iter)
-                        writer.add_image('Preds/', pred, i_iter)
-                        writer.add_image('Preds_bi/', pred_bi, i_iter)
-                        writer.add_image('Pred_edge/', pred_edge, i_iter)
-
-                    msg = 'epoch:%d | l_parse:%.2f l_embd:%.2f' % \
-                          (
-                              epoch,
-                              loss_parse.data.cpu().numpy(),
-                              loss_embedding.data.cpu().numpy(),
-                          )
-                    pbar.set_description(msg)
-                    pbar.update(1)
-                    #print('iter = {} of {} completed, loss = {}'.format(i_iter, total_iters, loss.data.cpu().numpy()))
-            if not dist.is_initialized() or dist.get_rank() == 0:
-                torch.save(model.module.state_dict(), osp.join(args.snapshot_dir, args.name, 'epoch_' + str(epoch) + '.pth'))
-
-                if epoch % args.test_fre == 0:
-                    valid_dict = valid(model, valloader, input_size, num_samples)
-                    def write_tf(prefix, arr, epoch, writer):
-                        for i, value in enumerate(arr):
-                            writer.add_scalar(prefix+'_%d' % i, value, epoch)
-
-                    for semantic_name, semantic_ret in valid_dict.items():
-                        mean_mIoU = np.average(semantic_ret['mIoU'][1:])
-                        mean_f1 = np.average(semantic_ret['f1'][1:])
-                        writer.add_scalar(semantic_name+'_mean_mIoU', mean_mIoU, epoch)
-                        writer.add_scalar(semantic_name+'_mean_f1', mean_f1, epoch)
-                        print('Epoch %d | %s @ mean_mIoU=%.4f mean_f1=%.4f' % (epoch, semantic_name, mean_mIoU, mean_f1))
-                        write_tf(semantic_name + '_mIoU', semantic_ret['mIoU'], epoch, writer)
-                        write_tf(semantic_name + '_f1', semantic_ret['f1'], epoch, writer)
+                        for semantic_name, semantic_ret in valid_dict.items():
+                            mean_mIoU = np.average(semantic_ret['mIoU'][1:])
+                            mean_f1 = np.average(semantic_ret['f1'][1:])
+                            writer.add_scalar(semantic_name+'_mean_mIoU', mean_mIoU, epoch)
+                            writer.add_scalar(semantic_name+'_mean_f1', mean_f1, epoch)
+                            print('Epoch %d | %s @ mean_mIoU=%.4f mean_f1=%.4f' % (epoch, semantic_name, mean_mIoU, mean_f1))
+                            write_tf(semantic_name + '_mIoU', semantic_ret['mIoU'], epoch, writer)
+                            write_tf(semantic_name + '_f1', semantic_ret['f1'], epoch, writer)
 
 
     end = timeit.default_timer()

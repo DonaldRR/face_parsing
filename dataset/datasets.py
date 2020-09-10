@@ -126,8 +126,12 @@ class HelenDataSet(data.Dataset):
 
         if self.dataset in 'train':
 
-            label_parsing = torch.from_numpy(label_parsing)
+            label_parsing1 = torch.from_numpy(label_parsing.copy())
+            label_parsing2 = torch.from_numpy(label_parsing.copy())
             bi_label_parsing = torch.from_numpy(bi_label_parsing)
             edge = torch.from_numpy(edge)
+        else:
+            label_parsing1 = label_parsing.copy()
+            label_parsing2 = label_parsing.copy()
 
-        return input, label_parsing, meta
+        return input, label_parsing1, label_parsing2, meta

@@ -3,6 +3,9 @@ import numpy as np
 import torchvision
 import torch
 from torch import nn
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import normalize
+import cv2
 
 # colour map
 COLORS = [(0,0,0)
@@ -16,7 +19,24 @@ COLORS = [(0,0,0)
                 ,(0,64,0),(128,64,0),(0,192,0),(128,192,0),(0,64,128)]
                 # 16=potted plant, 17=sheep, 18=sofa, 19=train, 20=tv/monitor
 
+def vis_embedding(embeddings):
 
+    # embeddings: (n, c, h, w)
+    embeddings = embeddings.detach().cpu().numpy()
+    n, c, h, w = embeddings.shape
+    images = []
+    for i in range(n):
+        embedding_map = embeddings[i]
+        embedding_map = np.reshape(embedding_map, (c, -1))
+        embedding_map = np.moveaxis(embedding_map, 1, 0)
+        pca = PCA(n_components=3)
+        reduced_embedding_map = pca.fit_transform(embedding_map)
+        reduced_embedding_map = normalize(reduced_embedding_map) * 128 + 128
+        reduced_embedding_map = np.reshape(reduced_embedding_map, (h, w, 3)).astype(int)
+        images.append(np.moveaxis(reduced_embedding_map, 2, 0))
+    images = np.stack(images, axis=0)
+
+    return torch.from_numpy(images)
 
 
 def decode_parsing(labels, num_images=1, num_classes=21, is_pred=False):

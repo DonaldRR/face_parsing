@@ -17,6 +17,10 @@ def conv3x3(in_planes, out_planes, stride=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                      padding=1, bias=False)
 
+def conv1x1(in_planes, out_planes, stride=1):
+    "1x1 convolution with padding"
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride,
+                     padding=0, bias=False)
 class Bottleneck(nn.Module):
     expansion = 4
     def __init__(self, inplanes, planes, stride=1, abn=InPlaceABNSync, dilation=1, downsample=None, fist_dilation=1, multi_grid=1):
@@ -172,7 +176,7 @@ class Embedding(nn.Module):
         self.normalize = normalize
         self.num_s = int(plane_mid)
         self.num_n = (mids) * (mids)
-        self.priors = nn.AdaptiveAvgPool2d(output_size=(mids + 2, mids + 2))
+        self.priors = nn.AdaptiveAvgPool2d(output_size=(mids, mids))
 
         self.conv_state = nn.Conv2d(num_in, self.num_s, kernel_size=1)
         self.conv_proj = nn.Conv2d(num_in, self.num_s, kernel_size=1)
@@ -196,12 +200,12 @@ class Embedding(nn.Module):
         regions_embedding = torch.matmul(corse_corr, embedding_proj.view(n, embedding_proj.size(1), -1).permute(0, 2, 1)) # (n, h/s * w/s, K)
         if self.normalize:
             regions_embedding = regions_embedding * (1. / corse_corr.size(2))
-        regions_embedding = self.gcn(regions_embedding) # (n, h/s * w/s, K)
+        regions_embedding = self.gcn(regions_embedding.permute(0, 2, 1)).permute(0, 2, 1) # (n, K, h/s * w/s)
 
         # pixels embedding
         fine_corr = torch.nn.functional.softmax(corr, dim=2) # (n, h * w, h/s * w/s)
-        pixels_embedding = torch.matmul(fine_corr, regions_embedding)
-        out = embedding + self.blocker(self.conv_extend(pixels_embedding))
+        pixels_embedding = torch.matmul(fine_corr, regions_embedding).permute(0, 2, 1) # (n, K, h * w)
+        out = embedding + self.blocker(self.conv_extend(pixels_embedding.view(n, pixels_embedding.size(1), h, w)))
 
         return out
 
@@ -224,7 +228,7 @@ class EAGRModule(nn.Module):
 
 
     def forward(self, x, edge):
-        edge = F.upsample(edge, (x.size()[-2], x.size()[-1]))
+        edge = F.interpolate(edge, (x.size()[-2], x.size()[-1]), mode='bilinear')
 
         n, c, h, w = x.size()
         edge = torch.nn.functional.softmax(edge, dim=1)[:, 1, :, :].unsqueeze(1)
@@ -277,6 +281,10 @@ class EAGRNet(nn.Module):
         self.layer4 = self._make_layer(Bottleneck, 512, self.layers[3], stride=strides[3], dilation=dilations[3], multi_grid=(1,1,1))
         self.layer5 = PSPModule(2048,512,abn)
         #self.edge_layer = Edge_Module(abn)
+        self.conv4 = conv3x3(256, 256)
+        self.bn4 = abn(256)
+        self.conv5 = conv1x1(512, 256)
+        self.bn5 = abn(256)
         self.block1 = Embedding(512, 128, 4, abn)
         self.block2 = Embedding(256, 64, 4, abn)
         self.layer6 = Decoder_Module(512, 256, num_classes, abn)
@@ -310,12 +318,11 @@ class EAGRNet(nn.Module):
         x5 = self.layer4(x4) # 60 x 60
         x = self.layer5(x5) # 60 x 60
         #edge,edge_fea = self.edge_layer(x2,x3,x4)
-        import pdb
-        pdb.set_trace()
-        deep_embedding = self.block1(x)
-        shallow_embedding = self.block2(x2)
-        seg, _ = self.layer6(deep_embedding, shallow_embedding)
+        enhanced_x = self.block1(x)
+        x2 = torch.nn.functional.interpolate(self.bn5(self.conv5(enhanced_x)), size=(x2.size(2), x2.size(3)), mode='bilinear') + self.bn4(self.conv4(x2))
+        enhanced_x2 = self.block2(x2)
+        seg, _ = self.layer6(enhanced_x, enhanced_x2)
         # seg_bi, _ = self.layer7(x, x2)
     
-        return seg, shallow_embedding, deep_embedding
+        return seg, x2, x
 

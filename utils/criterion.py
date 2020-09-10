@@ -89,16 +89,15 @@ class CriterionCrossEntropyEdgeParsing_boundary_attention_loss(nn.Module):
         # pred: seg_pred
         # target: seg_label
         h, w = target.size(1), target.size(2)
-        
-        target = target.data.cpu().numpy().astype(np.int64)
-        scale_parse = F.upsample(input=pred, size=(h, w), mode='bilinear') # parsing
+
+        scale_parse = F.interpolate(input=pred, size=(h, w), mode='bilinear') # parsing
         loss_parse = self.criterion(scale_parse, target)
 
         return loss_parse
 
 class DiscriminativeLoss(nn.Module):
 
-    def __init__(self, n_classes, alpha=.3, beta=.5):
+    def __init__(self, n_classes, alpha=.05, beta=1., ignore_label=255):
         super(DiscriminativeLoss, self).__init__()
 
         self.n_classes = n_classes
@@ -106,35 +105,39 @@ class DiscriminativeLoss(nn.Module):
         self.beta = beta
 
     def forward(self, embedding, label):
-        import pdb
-        pdb.set_trace()
 
         # embedding: (n, c, h', w')
         # label: (n, h, w)
         # alpha: scalar, maximum intra-cluster radius
         # beta: scalar, minimum inter-cluster radius
 
-        N, H, W = label.size()
-        C = embedding.size(1)
-        embedding = F.upsample(embedding, size=(H, W), mode='bilinear')
+        label[label == 255] = 0
+
+        N, C, H, W = embedding.size()
+        label = F.interpolate(label.unsqueeze(1).float(), size=(H, W)).squeeze().long()
         one_hot_label = torch.nn.functional.one_hot(label.view(-1), self.n_classes).view(N, H * W, -1).permute(0, 2,
                                                                                                           1)  # (n, K, h * w)
         count = one_hot_label.view(N, self.n_classes, -1).sum(2)  # (n, K)
         mask = (count > 0).int()  # (n, K)
         one_hot_label = one_hot_label.unsqueeze(2).repeat(1, 1, C, 1)  # (n, K, c, h * w)
-        embedding = embedding.unsqueeze(1).repeat(1, self.n_classes).view(N, self.n_classes, C, -1)  # (n, K, c, h * w)
+        embedding = F.normalize(embedding, dim=1)
+        embedding = embedding.unsqueeze(1).repeat(1, self.n_classes, 1, 1, 1).view(N, self.n_classes, C, -1)  # (n, K, c, h * w)
         embedding = embedding * one_hot_label
-        embedding = embedding.sum(3)  # (n, K, c)
-        embedding_mean = embedding / (count.unsqueeze(2) + 1)  # (n, K, c)
+        embedding_mean = embedding.sum(3) / (count.unsqueeze(2) + 1)  # (n, K, c)
         intra_dist = (embedding_mean.unsqueeze(3) - embedding) * one_hot_label  # (n, K, c, h * w)
-        l2_intra_dist = (intra_dist ** 2).mean(2)  # (n, K, h * w)
-        l2_intra_dist = l2_intra_dist.sum(2) / (count + 1)  # (n, K)
-        l2_intra_dist = (l2_intra_dist[:, 1:] * mask[:, 1:]).sum(1) / mask[1:].sum(1)  # (n)
+        l2_intra_dist = (intra_dist ** 2).sum(2)  # (n, K, h * w)
+        intra_mask = l2_intra_dist > self.alpha
+        l2_intra_dist = (l2_intra_dist - self.alpha) * intra_mask
+        l2_intra_dist = l2_intra_dist[:, 1:].sum(2).sum(1) / (intra_mask[:, 1:].sum(2).sum(1) + 1)
 
-        inter_dist = embedding_mean.unsqueeze(1).repeat(1, self.n_classes) - embedding_mean.unsqueeze(2).repeat(1, 1, self.n_classes)  # (n, K, K, c)
-        l2_inter_dist = (inter_dist ** 2).mean(3)  # (n, K, K)
-        l2_inter_dist = l2_inter_dist * mask.unsqueeze(1).repeat(1, self.n_classes)
+        inter_dist = embedding_mean.unsqueeze(1).repeat(1, self.n_classes, 1, 1) - embedding_mean.unsqueeze(2).repeat(1, 1, self.n_classes, 1)  # (n, K, K, c)
+        l2_inter_dist = (inter_dist ** 2).sum(3)  # (n, K, K)
+        l2_inter_dist = l2_inter_dist * mask.unsqueeze(1).repeat(1, self.n_classes, 1)
         l2_inter_dist = l2_inter_dist * mask.unsqueeze(2).repeat(1, 1, self.n_classes)
-        l2_inter_dist = l2_inter_dist[:, 1:, 1:].view(N, -1).sum(1) / (mask[1:].sum(1) * mask[1:].sum(1))  # (n)
+        inter_mask = (l2_inter_dist < self.beta) * (l2_inter_dist > 0)
+        l2_inter_dist = (self.beta - l2_inter_dist) * inter_mask
+        l2_inter_dist = l2_inter_dist[:, 1:, 1:].reshape(N, -1).sum(1) / (inter_mask[:, 1:].sum(2).sum(1) + 1) / 2
+        #l2_inter_dist = l2_inter_dist[:, 1:, 1:].reshape(N, -1).sum(1) / (mask[:, 1:].sum(1) * mask[:, 1:].sum(1))  # (n)
 
-        return l2_intra_dist - l2_inter_dist
+        return l2_intra_dist.mean(0), l2_inter_dist.mean(0)
+

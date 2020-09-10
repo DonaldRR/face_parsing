@@ -73,7 +73,7 @@ def valid(model, valloader, input_size, num_samples, dir=None):
     interp = torch.nn.Upsample(size=(input_size[0], input_size[1]), mode='bilinear', align_corners=True)
     with torch.no_grad():
         for index, batch in enumerate(valloader):
-            image, bi_label, label, edge, meta = batch
+            image, label, label1, meta = batch
             num_images = image.size(0)
             if index % 10 == 0:
                 print('%d  processd' % (index * num_images))
@@ -83,7 +83,7 @@ def valid(model, valloader, input_size, num_samples, dir=None):
             scales[idx:idx + num_images, :] = s[:, :]
             centers[idx:idx + num_images, :] = c[:, :]
 
-            pred_parsing, pred_parsing_bi, pred_edge = model(image.cuda())
+            pred, shallow_embedding, deep_embedding = model(image.cuda())
 
             def parse_to_label(pred, iterp_func):
 
@@ -96,9 +96,7 @@ def valid(model, valloader, input_size, num_samples, dir=None):
 #            preds_parsing_bi[idx:idx + num_images, :, :] = parse_to_label(pred_parsing_bi, interp)
 #            preds_edge[idx:idx + num_images, :, :] = parse_to_label(pred_edge, interp)
 #            idx += num_images
-            ConfMat_parsing += compute_confusion_matrix(parse_to_label(pred_parsing, interp), label, pred_parsing.size(1))
-            ConfMat_parsing_bi += compute_confusion_matrix(parse_to_label(pred_parsing_bi, interp), bi_label, pred_parsing_bi.size(1))
-            ConfMat_edge += compute_confusion_matrix(parse_to_label(pred_edge, interp), edge, pred_edge.size(1))
+            ConfMat_parsing += compute_confusion_matrix(parse_to_label(pred, interp), label, pred.size(1))
 
             if dir:
                 pass
@@ -117,13 +115,9 @@ def valid(model, valloader, input_size, num_samples, dir=None):
         return mIoUs, f1s
 
     parsing_mIoUs, parsing_f1s = compute_mIoU_f1(ConfMat_parsing)
-    parsing_bi_mIoUs, parsing_bi_f1s = compute_mIoU_f1(ConfMat_parsing_bi)
-    edge_mIoUs, edge_f1s = compute_mIoU_f1(ConfMat_edge)
 
     return {
         'parsing': {'mIoU': parsing_mIoUs, 'f1': parsing_f1s},
-        'parsing_bi': {'mIoU': parsing_bi_mIoUs, 'f1': parsing_bi_f1s},
-        'edge': {'mIoU': edge_mIoUs, 'f1': edge_f1s}
     }
 
 
