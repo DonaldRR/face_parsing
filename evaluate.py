@@ -103,6 +103,7 @@ def valid(model, valloader, input_size, num_samples, dir=None):
             if dir:
                 pass
 
+
     def compute_mIoU_f1(m):
         n_class = len(m)
         mIoUs = []

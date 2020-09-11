@@ -166,9 +166,9 @@ def main():
     if not os.path.exists(args.snapshot_dir):
         os.makedirs(args.snapshot_dir)
     save_dir = os.path.join(args.snapshot_dir, args.name)
-    if os.path.exists(save_dir):
-        os.system('rm -r %s' % save_dir)
-    os.mkdir(save_dir)
+#    if os.path.exists(save_dir):
+#        os.system('rm -r %s' % save_dir)
+#    os.mkdir(save_dir)
 
     h, w = map(int, args.input_size.split(','))
     input_size = [h, w]
