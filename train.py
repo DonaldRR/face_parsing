@@ -62,7 +62,7 @@ def get_arguments():
       A list of parsed arguments.
     """
     parser = argparse.ArgumentParser(description="CE2P Network")
-    parser.add_argument("--name", type=str, default='no_edge',
+    parser.add_argument("--name", type=str, default='no_edge_v1',
                         help="Name for the (saved)model")
     parser.add_argument("--pretrained-dir", type=str, default=PRETRAINED_DIR,
                         help="Where the pretrained networks are")
@@ -335,7 +335,7 @@ def main():
                         valid_dict = valid(model, valloader, input_size, num_samples)
                         def write_tf(prefix, arr, epoch, writer):
                             for i, value in enumerate(arr):
-                                writer.add_scalar(prefix+'_%d' % i, value, epoch)
+                                writer.add_scalar(prefix+'/%d' % i, value, epoch)
 
                         for semantic_name, semantic_ret in valid_dict.items():
                             for metric_name, metric_values in semantic_ret.items():

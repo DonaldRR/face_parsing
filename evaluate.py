@@ -66,8 +66,6 @@ def valid(model, valloader, input_size, num_samples, dir=None):
     centers = np.zeros((num_samples, 2), dtype=np.int32)
 
     ConfMat_parsing = np.zeros((11, 11))
-    ConfMat_parsing_bi = np.zeros((2, 2))
-    ConfMat_edge = np.zeros((2, 2))
 
     idx = 0
     interp = torch.nn.Upsample(size=(input_size[0], input_size[1]), mode='bilinear', align_corners=True)

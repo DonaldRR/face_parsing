@@ -136,8 +136,8 @@ class DiscriminativeLoss(nn.Module):
         l2_inter_dist = l2_inter_dist * mask.unsqueeze(2).repeat(1, 1, self.n_classes)
         inter_mask = (l2_inter_dist < self.beta) * (l2_inter_dist > 0)
         l2_inter_dist = (self.beta - l2_inter_dist) * inter_mask
-        l2_inter_dist = l2_inter_dist[:, 1:, 1:].reshape(N, -1).sum(1) / (inter_mask[:, 1:].sum(2).sum(1) + 1) / 2
-        #l2_inter_dist = l2_inter_dist[:, 1:, 1:].reshape(N, -1).sum(1) / (mask[:, 1:].sum(1) * mask[:, 1:].sum(1))  # (n)
+        l2_inter_dist = l2_inter_dist.sum(2).sum(1) / (inter_mask.sum(2).sum(1) + 1)
+        #l2_inter_dist = l2_inter_dist[:, 1:, 1:].reshape(N, -1).sum(1) / (inter_mask[:, 1:].sum(2).sum(1) + 1) / 2
 
         return l2_intra_dist.mean(0), l2_inter_dist.mean(0)
 
