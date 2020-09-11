@@ -73,21 +73,20 @@ class CriterionAll(nn.Module):
         loss = self.parsing_loss_bk(preds, target) 
         return loss
     
-class CriterionCrossEntropyEdgeParsing_boundary_attention_loss(nn.Module):
+class CriterionCrossEntropy(nn.Module):
     """Weighted CE2P loss for face parsing.
     
     Put more focus on facial components like eyes, eyebrow, nose and mouth
     """
-    def __init__(self, loss_weight=[1.0, 1.0, 1.0, 1.0], ignore_index=255, num_classes=11):
-        super(CriterionCrossEntropyEdgeParsing_boundary_attention_loss, self).__init__()
+    def __init__(self, ignore_index=255, num_classes=11):
+        super(CriterionCrossEntropy, self).__init__()
         self.ignore_index = ignore_index   
         self.criterion = torch.nn.CrossEntropyLoss(ignore_index=ignore_index) 
-        self.criterion_weight = torch.nn.CrossEntropyLoss(reduction='none', ignore_index=ignore_index) 
-        self.loss_weight = loss_weight
-          
+
     def forward(self, pred, target):
         # pred: seg_pred
         # target: seg_label
+        target[target == self.ignore_index] = 0
         h, w = target.size(1), target.size(2)
 
         scale_parse = F.interpolate(input=pred, size=(h, w), mode='bilinear') # parsing
@@ -136,8 +135,8 @@ class DiscriminativeLoss(nn.Module):
         l2_inter_dist = l2_inter_dist * mask.unsqueeze(2).repeat(1, 1, self.n_classes)
         inter_mask = (l2_inter_dist < self.beta) * (l2_inter_dist > 0)
         l2_inter_dist = (self.beta - l2_inter_dist) * inter_mask
-        l2_inter_dist = l2_inter_dist.sum(2).sum(1) / (inter_mask.sum(2).sum(1) + 1)
-        #l2_inter_dist = l2_inter_dist[:, 1:, 1:].reshape(N, -1).sum(1) / (inter_mask[:, 1:].sum(2).sum(1) + 1) / 2
+        #l2_inter_dist = l2_inter_dist.sum(2).sum(1) / (inter_mask.sum(2).sum(1) + 1)
+        l2_inter_dist = l2_inter_dist[:, 1:, 1:].reshape(N, -1).sum(1) / (inter_mask[:, 1:, 1:].sum(2).sum(1) + 1)
 
         return l2_intra_dist.mean(0), l2_inter_dist.mean(0)
 

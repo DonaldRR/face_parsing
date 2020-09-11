@@ -66,26 +66,28 @@ def valid(model, valloader, input_size, num_samples, dir=None):
     centers = np.zeros((num_samples, 2), dtype=np.int32)
 
     ConfMat_parsing = np.zeros((11, 11))
+    ConfMat_parsing_bi1 = np.zeros((2, 2))
+    ConfMat_parsing_bi2 = np.zeros((2, 2))
 
     idx = 0
     interp = torch.nn.Upsample(size=(input_size[0], input_size[1]), mode='bilinear', align_corners=True)
     with torch.no_grad():
         for index, batch in enumerate(valloader):
-            image, label, label1, meta = batch
+            image, label, bi_label, meta = batch
             num_images = image.size(0)
-            if index % 10 == 0:
-                print('%d  processd' % (index * num_images))
 
             c = meta['center'].numpy()
             s = meta['scale'].numpy()
             scales[idx:idx + num_images, :] = s[:, :]
             centers[idx:idx + num_images, :] = c[:, :]
 
-            pred, shallow_embedding, deep_embedding = model(image.cuda())
+            pred, shallow_embedding, deep_embedding, pred_bi1, pred_bi2 = model(image.cuda())
 
-            def parse_to_label(pred, iterp_func):
+            def parse_to_label(pred, target):
+                target_h, target_w = target.size(1), target.size(2)
+                pred = torch.nn.functional.interpolate(pred, size=(target_h, target_w), mode='bilinear', align_corners=True)
 
-                pred = iterp_func(pred).data.cpu().numpy()
+                pred = pred.data.cpu().numpy()
                 pred = pred.transpose(0, 2, 3, 1)
                 pred = np.asarray(np.argmax(pred, axis=3), dtype=np.uint8)
 
@@ -94,7 +96,9 @@ def valid(model, valloader, input_size, num_samples, dir=None):
 #            preds_parsing_bi[idx:idx + num_images, :, :] = parse_to_label(pred_parsing_bi, interp)
 #            preds_edge[idx:idx + num_images, :, :] = parse_to_label(pred_edge, interp)
 #            idx += num_images
-            ConfMat_parsing += compute_confusion_matrix(parse_to_label(pred, interp), label, pred.size(1))
+            ConfMat_parsing += compute_confusion_matrix(parse_to_label(pred, label), label, pred.size(1))
+            ConfMat_parsing_bi1 += compute_confusion_matrix(parse_to_label(pred_bi1, bi_label), bi_label, pred_bi1.size(1))
+            ConfMat_parsing_bi2 += compute_confusion_matrix(parse_to_label(pred_bi2, bi_label), bi_label, pred_bi2.size(1))
 
             if dir:
                 pass
@@ -116,14 +120,22 @@ def valid(model, valloader, input_size, num_samples, dir=None):
             f1s.append(2 / (1 / recall + 1 / precision))
             mIoUs.append(intersection / (n_true + n_pos - intersection))
 
-        return mIoUs, f1s, recalls, precisions
+        pixel_acc = np.diag(m).sum() / m.sum()
 
-    parsing_mIoUs, parsing_f1s, parsing_recalls, parsing_precisions = compute_mIoU_f1(ConfMat_parsing)
-    parsing_mean_accuracy = np.diag(ConfMat_parsing).sum() / ConfMat_parsing.sum()
+        return {
+            'mIoU': mIoUs,
+            'f1': f1s,
+            'recalls': recalls,
+            'precisions': precisions,
+            'pixel_acc': pixel_acc
+        }
 
     return {
-        'parsing': {'mIoU': parsing_mIoUs, 'f1': parsing_f1s, 'recalls': parsing_recalls, 'precisions': parsing_precisions, 'mean_accuracy': parsing_mean_accuracy},
+        'parsing': compute_mIoU_f1(ConfMat_parsing),
+        'parsing_bi1': compute_mIoU_f1(ConfMat_parsing_bi1),
+        'parsing_bi2': compute_mIoU_f1(ConfMat_parsing_bi2)
     }
+
 
 
 def main():

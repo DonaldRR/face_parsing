@@ -126,6 +126,38 @@ class PSPModule(nn.Module):
         bottle = self.bottleneck(torch.cat(priors, 1))
         return bottle
 
+class Head_Module(nn.Module):
+
+    def __init__(self, in_planes, num_classes, abn=InPlaceABNSync):
+        super(Head_Module, self).__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_planes, in_planes, kernel_size=3, padding=1, dilation=1, bias=False),
+            abn(in_planes),
+            nn.ReLU()
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(in_planes, in_planes // 2, kernel_size=3, padding=1, dilation=1, bias=False),
+            abn(in_planes // 2),
+            nn.ReLU()
+        )
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(in_planes // 2, in_planes // 2, kernel_size=3, padding=1, dilation=1, bias=False),
+            abn(in_planes // 2),
+            nn.ReLU()
+        )
+        self.conv4 = nn.Sequential(
+            nn.Conv2d(in_planes // 2, num_classes, kernel_size=1, padding=0, dilation=1, bias=False))
+
+    def forward(self, x):
+
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
+        mask = nn.functional.softmax(x, 1)[:, 0, :, :]
+
+        return x, mask
+
 class Decoder_Module(nn.Module):
     def __init__(self, in_plane1, in_plane2, num_classes, abn=InPlaceABNSync):
         super(Decoder_Module, self).__init__()
@@ -288,6 +320,9 @@ class EAGRNet(nn.Module):
         self.block1 = Embedding(512, 128, 4, abn)
         self.block2 = Embedding(256, 64, 4, abn)
         self.layer6 = Decoder_Module(512, 256, num_classes, abn)
+        self.head1 = Head_Module(512, 2, abn)
+        self.head2 = Head_Module(256, 2, abn)
+
         #self.layer7 = Decoder_Module(512, 256, 2, abn)
 
     def _make_layer(self, block, planes, blocks, stride=1, dilation=1, multi_grid=1):
@@ -319,10 +354,14 @@ class EAGRNet(nn.Module):
         x = self.layer5(x5) # 60 x 60
         #edge,edge_fea = self.edge_layer(x2,x3,x4)
         enhanced_x = self.block1(x)
+        bi_seg1, mask1 = self.head1(enhanced_x)
+        enhanced_x = enhanced_x * mask1.unsqueeze(1)
         x2 = torch.nn.functional.interpolate(self.bn5(self.conv5(enhanced_x)), size=(x2.size(2), x2.size(3)), mode='bilinear') + self.bn4(self.conv4(x2))
         enhanced_x2 = self.block2(x2)
+        bi_seg2, mask2 = self.head2(enhanced_x2)
+        enhanced_x2 = enhanced_x2 * mask2.unsqueeze(1)
         seg, _ = self.layer6(enhanced_x, enhanced_x2)
         # seg_bi, _ = self.layer7(x, x2)
     
-        return seg, x2, x
+        return seg, x2, x, bi_seg1, bi_seg2
 

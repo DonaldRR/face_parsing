@@ -107,7 +107,7 @@ class HelenDataSet(data.Dataset):
             borderValue=(255))
         bi_label_parsing = np.copy(label_parsing)
         for mask_id in range(11):
-            if mask_id in [1, 2, 3, 4, 5, 6, 7, 8, 9]:
+            if mask_id in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
                 bi_label_parsing[bi_label_parsing == mask_id] = 1
             else:
                 bi_label_parsing[bi_label_parsing == mask_id] = 0
@@ -124,14 +124,14 @@ class HelenDataSet(data.Dataset):
             'rotation': r
         }
 
-        if self.dataset in 'train':
+#        if self.dataset in 'train':
+#
+#            label_parsing1 = torch.from_numpy(label_parsing.copy())
+#            label_parsing2 = torch.from_numpy(label_parsing.copy())
+#            bi_label_parsing = torch.from_numpy(bi_label_parsing)
+#            edge = torch.from_numpy(edge)
+#        else:
+#            label_parsing1 = label_parsing.copy()
+#            label_parsing2 = label_parsing.copy()
 
-            label_parsing1 = torch.from_numpy(label_parsing.copy())
-            label_parsing2 = torch.from_numpy(label_parsing.copy())
-            bi_label_parsing = torch.from_numpy(bi_label_parsing)
-            edge = torch.from_numpy(edge)
-        else:
-            label_parsing1 = label_parsing.copy()
-            label_parsing2 = label_parsing.copy()
-
-        return input, label_parsing1, label_parsing2, meta
+        return input, label_parsing, bi_label_parsing, meta

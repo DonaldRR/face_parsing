@@ -17,7 +17,7 @@ import torchvision.transforms as transforms
 import timeit
 from tensorboardX import SummaryWriter
 from utils.utils import decode_parsing, inv_preprocess, SingleGPU, vis_embedding
-from utils.criterion import CriterionAll, CriterionCrossEntropyEdgeParsing_boundary_attention_loss, DiscriminativeLoss
+from utils.criterion import CriterionAll, CriterionCrossEntropy, DiscriminativeLoss
 from utils.encoding import DataParallelModel, DataParallelCriterion 
 from utils.miou import compute_mean_ioU
 from evaluate import valid
@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 
 start = timeit.default_timer()
   
-BATCH_SIZE = 6
+BATCH_SIZE = 3
 DATA_DIRECTORY = './dataset/Helen'
 IGNORE_LABEL = 255
 INPUT_SIZE = '256,256'
@@ -62,7 +62,7 @@ def get_arguments():
       A list of parsed arguments.
     """
     parser = argparse.ArgumentParser(description="CE2P Network")
-    parser.add_argument("--name", type=str, default='no_edge_v1',
+    parser.add_argument("--name", type=str, default='no_edge_v1.1',
                         help="Name for the (saved)model")
     parser.add_argument("--pretrained-dir", type=str, default=PRETRAINED_DIR,
                         help="Where the pretrained networks are")
@@ -217,7 +217,7 @@ def main():
     else:
         model = SingleGPU(model)
 
-    criterion_CE = CriterionCrossEntropyEdgeParsing_boundary_attention_loss(loss_weight=[1])
+    criterion_CE = CriterionCrossEntropy()
     criterion_CE.cuda()
 
     criterion_DL = DiscriminativeLoss(11)
@@ -264,16 +264,25 @@ def main():
                     i_iter += len(trainloader) * epoch
                     lr = adjust_learning_rate(optimizer, i_iter, total_iters)
 
-                    images, labels, labels1, _ = batch
-                    labels = labels.long().cuda()
-                    labels1 = labels1.long().cuda()
+                    images, labels, bi_label, _ = batch
+#                    labels = labels.long().cuda()
+#                    labels1 = labels1.long().cuda()
+#                    bi_label = bi_label.long().cuda()
 
-                    preds, shallow_embedding, deep_embedding = model(images)
+                    preds, shallow_embedding, deep_embedding, pred_bi1, pred_bi2 = model(images)
 
-                    loss_parse = criterion_CE(preds, labels)
-                    loss_intra_s, loss_inter_s = criterion_DL(shallow_embedding, labels1)
-                    loss_intra_d, loss_inter_d = criterion_DL(deep_embedding, labels1)
-                    loss = loss_parse * 2 + loss_intra_s * .5 + loss_intra_d * .5+ loss_inter_s * .5 + loss_inter_d * .5
+                    loss_parse = criterion_CE(preds, labels.clone().long().cuda())
+                    loss_parse_bi1 = criterion_CE(pred_bi1, bi_label.clone().long().cuda())
+                    loss_parse_bi2 = criterion_CE(pred_bi2, bi_label.clone().long().cuda())
+                    loss_intra_s, loss_inter_s = criterion_DL(shallow_embedding, labels.clone().long().cuda())
+                    loss_intra_d, loss_inter_d = criterion_DL(deep_embedding, labels.clone().long().cuda())
+                    loss = loss_parse * 2 + \
+                           loss_intra_s * .5 + \
+                           loss_intra_d * .5+ \
+                           loss_inter_s * .5 + \
+                           loss_inter_d * .5 + \
+                           loss_parse_bi1 * .5 + \
+                           loss_parse_bi2 * .5
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
@@ -299,6 +308,8 @@ def main():
                             if isinstance(preds, list):
                                 preds = preds[0]
                             preds_colors = decode_parsing(preds, args.save_num_images, args.num_classes, is_pred=True)
+                            preds_bi_colors1 = decode_parsing(pred_bi1, args.save_num_images, 2, is_pred=True)
+                            preds_bi_colors2 = decode_parsing(pred_bi2, args.save_num_images, 2, is_pred=True)
                             shallow_embedding_colors = vis_embedding(shallow_embedding)
                             deep_embedding_colors = vis_embedding(deep_embedding)
 
@@ -307,15 +318,20 @@ def main():
                             pred = vutils.make_grid(preds_colors, normalize=False, scale_each=True)
                             shallow_embedding = vutils.make_grid(shallow_embedding_colors, normalize=False, scale_each=True)
                             deep_embedding = vutils.make_grid(deep_embedding_colors, normalize=False, scale_each=True)
+                            pred_bi1 = vutils.make_grid(preds_bi_colors1, normalize=False, scale_each=True)
+                            pred_bi2 = vutils.make_grid(preds_bi_colors2, normalize=False, scale_each=True)
 
 
                             writer.add_image('Images/', img, i_iter)
                             writer.add_image('Labels/', lab, i_iter)
                             writer.add_image('Preds/', pred, i_iter)
-                            writer.add_image('Embd1/', shallow_embedding, i_iter)
-                            writer.add_image('Embd2/', deep_embedding, i_iter)
+                            writer.add_image('Embd/shallow', shallow_embedding, i_iter)
+                            writer.add_image('Embd/deep', deep_embedding, i_iter)
+                            writer.add_image('Pred_bi/1', pred_bi1, i_iter)
+                            writer.add_image('Pred_bi/2', pred_bi2, i_iter)
 
-                        msg = 'epoch:%d | l_parse:%.2f l_intra_s:%.2f l_inter_s:%.2f l_intra_d:%.2f l_inter_d:%.2f l_sum:%.2f' % \
+
+                        msg = 'epoch:%d | l_parse:%.2f l_intra_s:%.2f l_inter_s:%.2f l_intra_d:%.2f l_inter_d:%.2f l_bi1:%.2f l_bi2:%.2f l_sum:%.2f' % \
                               (
                                   epoch,
                                   loss_parse.data.cpu().numpy(),
@@ -323,6 +339,8 @@ def main():
                                   loss_inter_s.data.cpu().numpy(),
                                   loss_intra_d.data.cpu().numpy(),
                                   loss_inter_d.data.cpu().numpy(),
+                                  loss_parse_bi1.data.cpu().numpy(),
+                                  loss_parse_bi2.data.cpu().numpy(),
                                   loss.data.cpu().numpy()
                               )
                         pbar.set_description(msg)
@@ -341,6 +359,8 @@ def main():
                             for metric_name, metric_values in semantic_ret.items():
                                 if isinstance(metric_values, list):
                                     write_tf(semantic_name + '_' + metric_name, metric_values, epoch, writer)
+                                    writer.add_scalar(semantic_name + '_ ' + metric_name + '/mean', np.mean(metric_values), epoch)
+                                    writer.add_scalar(semantic_name + '_ ' + metric_name + '/mean_wo_bg', np.mean(metric_values[1:]), epoch)
                                 else:
                                     writer.add_scalar(semantic_name + '_' + metric_name, metric_values, epoch)
 
@@ -348,15 +368,16 @@ def main():
                             mean_f1_wo_bg = np.average(semantic_ret['f1'][1:])
                             mean_mIoU = np.average(semantic_ret['mIoU'])
                             mean_f1 = np.average(semantic_ret['f1'])
-                            writer.add_scalar(semantic_name + '_mean_mIoU/with_bg', mean_mIoU, epoch)
-                            writer.add_scalar(semantic_name + '_mean_mIoU/wo_bg', mean_mIoU_wo_bg, epoch)
-                            writer.add_scalar(semantic_name + '_mean_f1/with_bg', mean_f1, epoch)
-                            writer.add_scalar(semantic_name + '_mean_f1/wo_bg', mean_f1_wo_bg, epoch)
-                            writer.add_scalar(semantic_name + '_' + 'mean_acc', semantic_ret['mean_accuracy'], epoch)
+                            mean_accuracy = np.average(semantic_ret['precisions'])
                             print(
-                                'Epoch %d | %s \n\tmean_mIoU=%.4f \tmean_f1=%.4f \tmean_mIoU_wo_bg:%.4f \tmean_f1_wo_bg:%.4f \tmean_accuracy:%.4f' %
-                                (epoch, semantic_name, mean_mIoU, mean_f1, mean_mIoU_wo_bg, mean_f1_wo_bg,
-                                 semantic_ret['mean_accuracy']))
+                                'Epoch %d | %s \n'
+                                '  mean_mIoU=%.4f\n'
+                                '  mean_f1=%.4f\n'
+                                '  mean_mIoU_wo_bg:%.4f\n'
+                                '  mean_f1_wo_bg:%.4f\n'
+                                '  pixel_accuracy:%.4f'
+                                '  mean_accuracy:%.4f' %
+                                (epoch, semantic_name, mean_mIoU, mean_f1, mean_mIoU_wo_bg, mean_f1_wo_bg, semantic_ret['pixel_acc'], mean_accuracy))
 
 
     end = timeit.default_timer()
