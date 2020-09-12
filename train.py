@@ -271,9 +271,9 @@ def main():
                     preds, shallow_embedding, deep_embedding = model(images)
 
                     loss_parse = criterion_CE(preds, labels)
-                    loss_intra_s, loss_inter_s = criterion_DL(shallow_embedding, labels1)
-                    loss_intra_d, loss_inter_d = criterion_DL(deep_embedding, labels1)
-                    loss = loss_parse * 2 + loss_intra_s * .5 + loss_intra_d * .5+ loss_inter_s * .5 + loss_inter_d * .5
+                    loss_intra_s, loss_inter_s, loss_reg1 = criterion_DL(shallow_embedding, labels1)
+                    loss_intra_d, loss_inter_d, loss_reg2 = criterion_DL(deep_embedding, labels1)
+                    loss = loss_parse * 2 + loss_intra_s * .5 + loss_intra_d * .5+ loss_inter_s * .5 + loss_inter_d * .5 + loss_reg1 * .5 + loss_reg2 * .5
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
@@ -315,32 +315,39 @@ def main():
                             writer.add_image('Embd1/', shallow_embedding, i_iter)
                             writer.add_image('Embd2/', deep_embedding, i_iter)
 
-                        msg = 'epoch:%d | l_parse:%.2f l_intra_s:%.2f l_inter_s:%.2f l_intra_d:%.2f l_inter_d:%.2f l_sum:%.2f' % \
-                              (
-                                  epoch,
-                                  loss_parse.data.cpu().numpy(),
-                                  loss_intra_s.data.cpu().numpy(),
-                                  loss_inter_s.data.cpu().numpy(),
-                                  loss_intra_d.data.cpu().numpy(),
-                                  loss_inter_d.data.cpu().numpy(),
-                                  loss.data.cpu().numpy()
-                              )
-                        pbar.set_description(msg)
-                        pbar.update(1)
+                    msg = 'epoch:%d | l_parse:%.2f l_intra_s:%.2f l_inter_s:%.2f l_intra_d:%.2f l_inter_d:%.2f l_reg_s:%.2f l_reg_d:%.2f l_sum:%.2f' % \
+                          (
+                              epoch,
+                              loss_parse.data.cpu().numpy(),
+                              loss_intra_s.data.cpu().numpy(),
+                              loss_inter_s.data.cpu().numpy(),
+                              loss_intra_d.data.cpu().numpy(),
+                              loss_inter_d.data.cpu().numpy(),
+                              loss_reg1.data.cpu().numpy(),
+                              loss_reg2.data.cpu().numpy(),
+                              loss.data.cpu().numpy()
+                          )
+                    pbar.set_description(msg)
+                    pbar.update(1)
                         #print('iter = {} of {} completed, loss = {}'.format(i_iter, total_iters, loss.data.cpu().numpy()))
                 if not dist.is_initialized() or dist.get_rank() == 0:
                     torch.save(model.module.state_dict(), osp.join(args.snapshot_dir, args.name, 'epoch_' + str(epoch) + '.pth'))
 
                     if epoch % args.test_fre == 0:
                         valid_dict = valid(model, valloader, input_size, num_samples)
+
                         def write_tf(prefix, arr, epoch, writer):
                             for i, value in enumerate(arr):
-                                writer.add_scalar(prefix+'_%d' % i, value, epoch)
+                                writer.add_scalar(prefix + '/%d' % i, value, epoch)
 
                         for semantic_name, semantic_ret in valid_dict.items():
                             for metric_name, metric_values in semantic_ret.items():
                                 if isinstance(metric_values, list):
                                     write_tf(semantic_name + '_' + metric_name, metric_values, epoch, writer)
+                                    writer.add_scalar(semantic_name + '_ ' + metric_name + '/mean',
+                                                      np.mean(metric_values), epoch)
+                                    writer.add_scalar(semantic_name + '_ ' + metric_name + '/mean_wo_bg',
+                                                      np.mean(metric_values[1:]), epoch)
                                 else:
                                     writer.add_scalar(semantic_name + '_' + metric_name, metric_values, epoch)
 
@@ -348,15 +355,17 @@ def main():
                             mean_f1_wo_bg = np.average(semantic_ret['f1'][1:])
                             mean_mIoU = np.average(semantic_ret['mIoU'])
                             mean_f1 = np.average(semantic_ret['f1'])
-                            writer.add_scalar(semantic_name + '_mean_mIoU/with_bg', mean_mIoU, epoch)
-                            writer.add_scalar(semantic_name + '_mean_mIoU/wo_bg', mean_mIoU_wo_bg, epoch)
-                            writer.add_scalar(semantic_name + '_mean_f1/with_bg', mean_f1, epoch)
-                            writer.add_scalar(semantic_name + '_mean_f1/wo_bg', mean_f1_wo_bg, epoch)
-                            writer.add_scalar(semantic_name + '_' + 'mean_acc', semantic_ret['mean_accuracy'], epoch)
+                            mean_accuracy = np.average(semantic_ret['precisions'])
                             print(
-                                'Epoch %d | %s \n\tmean_mIoU=%.4f \tmean_f1=%.4f \tmean_mIoU_wo_bg:%.4f \tmean_f1_wo_bg:%.4f \tmean_accuracy:%.4f' %
+                                'Epoch %d | %s \n'
+                                '  mean_mIoU=%.4f\n'
+                                '  mean_f1=%.4f\n'
+                                '  mean_mIoU_wo_bg:%.4f\n'
+                                '  mean_f1_wo_bg:%.4f\n'
+                                '  pixel_accuracy:%.4f'
+                                '  mean_accuracy:%.4f' %
                                 (epoch, semantic_name, mean_mIoU, mean_f1, mean_mIoU_wo_bg, mean_f1_wo_bg,
-                                 semantic_ret['mean_accuracy']))
+                                 semantic_ret['pixel_acc'], mean_accuracy))
 
 
     end = timeit.default_timer()

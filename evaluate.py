@@ -17,12 +17,13 @@ from copy import deepcopy
 import cv2
 from inplace_abn import InPlaceABN
 from utils.miou import compute_mean_ioU, compute_confusion_matrix
+from tqdm import tqdm
 
-DATA_DIRECTORY = './datasets/Helen'
+DATA_DIRECTORY = './dataset/Helen'
 IGNORE_LABEL = 255
-NUM_CLASSES = 20
+NUM_CLASSES = 11
 SNAPSHOT_DIR = './snapshots/'
-INPUT_SIZE = (473,473)
+INPUT_SIZE = '256,256'
 
 def get_arguments():
     """Parse all the arguments provided from the CLI.
@@ -31,11 +32,12 @@ def get_arguments():
       A list of parsed arguments.
     """
     parser = argparse.ArgumentParser(description="CE2P Network")
+    parser.add_argument("--name", type=str, default='no_edge')
     parser.add_argument("--batch-size", type=int, default=1,
                         help="Number of images sent to the network in one step.")
     parser.add_argument("--data-dir", type=str, default=DATA_DIRECTORY,
                         help="Path to the directory containing the PASCAL VOC dataset.")
-    parser.add_argument("--dataset", type=str, default='val',
+    parser.add_argument("--dataset", type=str, default='test',
                         help="Path to the file listing the images in the dataset.")
     parser.add_argument("--ignore-label", type=int, default=IGNORE_LABEL,
                         help="The index of the label to ignore during the training.")
@@ -66,40 +68,46 @@ def valid(model, valloader, input_size, num_samples, dir=None):
     centers = np.zeros((num_samples, 2), dtype=np.int32)
 
     ConfMat_parsing = np.zeros((11, 11))
-    ConfMat_parsing_bi = np.zeros((2, 2))
-    ConfMat_edge = np.zeros((2, 2))
 
     idx = 0
     interp = torch.nn.Upsample(size=(input_size[0], input_size[1]), mode='bilinear', align_corners=True)
     with torch.no_grad():
-        for index, batch in enumerate(valloader):
-            image, label, label1, meta = batch
-            num_images = image.size(0)
-            if index % 10 == 0:
-                print('%d  processd' % (index * num_images))
+        with tqdm(total=len(valloader)) as pbar:
+            for index, batch in enumerate(valloader):
+                image, label, label1, meta = batch
+                num_images = image.size(0)
 
-            c = meta['center'].numpy()
-            s = meta['scale'].numpy()
-            scales[idx:idx + num_images, :] = s[:, :]
-            centers[idx:idx + num_images, :] = c[:, :]
+                c = meta['center'].numpy()
+                s = meta['scale'].numpy()
+                scales[idx:idx + num_images, :] = s[:, :]
+                centers[idx:idx + num_images, :] = c[:, :]
 
-            pred, shallow_embedding, deep_embedding = model(image.cuda())
+                pred, shallow_embedding, deep_embedding = model(image.cuda())
 
-            def parse_to_label(pred, iterp_func):
+                def parse_to_label(pred, iterp_func):
 
-                pred = iterp_func(pred).data.cpu().numpy()
-                pred = pred.transpose(0, 2, 3, 1)
-                pred = np.asarray(np.argmax(pred, axis=3), dtype=np.uint8)
+                    pred = iterp_func(pred).data.cpu().numpy()
+                    pred = pred.transpose(0, 2, 3, 1)
+                    pred = np.asarray(np.argmax(pred, axis=3), dtype=np.uint8)
 
-                return pred
-#            preds_parsing[idx:idx + num_images, :, :] = parse_to_label(pred_parsing, interp)
-#            preds_parsing_bi[idx:idx + num_images, :, :] = parse_to_label(pred_parsing_bi, interp)
-#            preds_edge[idx:idx + num_images, :, :] = parse_to_label(pred_edge, interp)
-#            idx += num_images
-            ConfMat_parsing += compute_confusion_matrix(parse_to_label(pred, interp), label, pred.size(1))
+                    return pred
+    #            preds_parsing[idx:idx + num_images, :, :] = parse_to_label(pred_parsing, interp)
+    #            preds_parsing_bi[idx:idx + num_images, :, :] = parse_to_label(pred_parsing_bi, interp)
+    #            preds_edge[idx:idx + num_images, :, :] = parse_to_label(pred_edge, interp)
+    #            idx += num_images
+                ConfMat_parsing += compute_confusion_matrix(parse_to_label(pred, interp), label, pred.size(1))
 
-            if dir:
-                pass
+                if dir:
+                    save_dict = {
+                        'meta': meta,
+                        'image': image.detach().cpu().numpy(),
+                        'label': label.numpy(),
+                        'pred': pred.detach().cpu().numpy(),
+                        'shallow_embedding': shallow_embedding.detach().cpu().numpy(),
+                        'deep_embedding': deep_embedding.detach().cpu().numpy()
+                    }
+                    np.save(os.path.join(dir, '%d.npy' % index), save_dict)
+                pbar.update(1)
 
     def compute_mIoU_f1(m):
         n_class = len(m)
@@ -118,13 +126,18 @@ def valid(model, valloader, input_size, num_samples, dir=None):
             f1s.append(2 / (1 / recall + 1 / precision))
             mIoUs.append(intersection / (n_true + n_pos - intersection))
 
-        return mIoUs, f1s, recalls, precisions
+        pixel_acc = np.diag(m).sum() / m.sum()
 
-    parsing_mIoUs, parsing_f1s, parsing_recalls, parsing_precisions = compute_mIoU_f1(ConfMat_parsing)
-    parsing_mean_accuracy = np.diag(ConfMat_parsing).sum() / ConfMat_parsing.sum()
+        return {
+            'mIoU': mIoUs,
+            'f1': f1s,
+            'recalls': recalls,
+            'precisions': precisions,
+            'pixel_acc': pixel_acc
+        }
 
     return {
-        'parsing': {'mIoU': parsing_mIoUs, 'f1': parsing_f1s, 'recalls': parsing_recalls, 'precisions': parsing_precisions, 'mean_accuracy': parsing_mean_accuracy},
+        'parsing': compute_mIoU_f1(ConfMat_parsing)
     }
 
 
@@ -162,14 +175,13 @@ def main():
     model.cuda()
     model.eval()
 
-    save_path =  os.path.join(args.data_dir, 'full')
+    save_path =  os.path.join(args.data_dir, 'viz')
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-    parsing_preds, scales, centers = valid(model, valloader, input_size, num_samples, save_path)
-    mIoU, f1 = compute_mean_ioU(parsing_preds, scales, centers, args.num_classes, args.data_dir, input_size, 'test', reverse=True)
-
-    print(mIoU)
-    print(f1)
+    valid_dict = valid(model, valloader, input_size, num_samples, save_path)
+    #mIoU, f1 = compute_mean_ioU(parsing_preds, scales, centers, args.num_classes, args.data_dir, input_size, 'test', reverse=True)
+    #print(mIoU)
+    #print(f1)
 
 if __name__ == '__main__':
     main()

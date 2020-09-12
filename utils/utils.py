@@ -5,6 +5,8 @@ import torch
 from torch import nn
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import normalize
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from matplotlib.figure import Figure
 import cv2
 
 # colour map
@@ -26,18 +28,52 @@ def vis_embedding(embeddings):
     n, c, h, w = embeddings.shape
     images = []
     for i in range(n):
-        embedding_map = embeddings[i]
-        embedding_map = np.reshape(embedding_map, (c, -1))
-        embedding_map = np.moveaxis(embedding_map, 1, 0)
-        pca = PCA(n_components=3)
-        reduced_embedding_map = pca.fit_transform(embedding_map)
-        reduced_embedding_map = normalize(reduced_embedding_map) * 128 + 128
-        reduced_embedding_map = np.reshape(reduced_embedding_map, (h, w, 3)).astype(int)
-        images.append(np.moveaxis(reduced_embedding_map, 2, 0))
+        images.append(draw_projection(embeddings[i]))
+#        embedding_map = embeddings[i]
+#        embedding_map = np.reshape(embedding_map, (c, -1))
+#        embedding_map = np.moveaxis(embedding_map, 1, 0)
+#        pca = PCA(n_components=3)
+#        reduced_embedding_map = pca.fit_transform(embedding_map)
+#        reduced_embedding_map = normalize(reduced_embedding_map) * 128 + 128
+#        reduced_embedding_map = np.reshape(reduced_embedding_map, (h, w, 3)).astype(int)
+#        images.append(np.moveaxis(reduced_embedding_map, 2, 0))
     images = np.stack(images, axis=0)
 
-    return torch.from_numpy(images)
+    return torch.from_numpy(images).permute(0, 3, 1, 2)
 
+
+def draw_projection(embedding, dsize=(256, 256)):
+    # embeddings: (C, H, W)
+    C, H, W = embedding.shape
+    embedding = np.moveaxis(embedding, 0, 2)
+
+    embedding = embedding.reshape((H * W, C))
+
+    pca_3d = PCA(n_components=3)
+    embd_3d = pca_3d.fit_transform(embedding)
+    embd_3d = normalize(embd_3d) * .5 + .5
+
+    pca_2d = PCA(n_components=2)
+    embd_2d = pca_2d.fit_transform(embedding)
+
+    fig = Figure()
+    canvas = FigureCanvas(fig)
+    ax = fig.gca()
+
+    ax.scatter(embd_2d[:, 0], embd_2d[:, 1], color=list(map(tuple, embd_3d)), marker='.')
+    ax.axis('off')
+
+    canvas.draw()  # draw the canvas, cache the renderer
+
+    image = np.fromstring(canvas.tostring_rgb(), dtype='uint8')
+    width, height = fig.get_size_inches() * fig.get_dpi()
+    image = image.reshape((int(height), int(width), 3))
+    image = cv2.resize(image, (dsize[1], dsize[0]), interpolation=cv2.INTER_NEAREST)
+    embd_3d = embd_3d.reshape((H, W, 3)) * 255
+    embd_3d = cv2.resize(embd_3d.astype(float), (dsize[1], dsize[0]), interpolation=cv2.INTER_LINEAR)
+    ret = np.concatenate((embd_3d, image), axis=0).astype(int)
+
+    return ret
 
 def decode_parsing(labels, num_images=1, num_classes=21, is_pred=False):
     """Decode batch of segmentation masks.
