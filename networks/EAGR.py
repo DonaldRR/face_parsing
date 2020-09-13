@@ -183,6 +183,15 @@ class Embedding(nn.Module):
         self.gcn = GCN(num_state=self.num_s, num_node=self.num_n)
         self.conv_extend = nn.Conv2d(self.num_s, num_in, kernel_size=1, bias=False)
 
+        self.channel_attention = nn.Sequential(
+            nn.Conv2d(2 * num_in, num_in, kernel_size=1),
+            nn.AdaptiveAvgPool2d(output_size=(1, 1)),
+            nn.Conv2d(num_in, num_in, kernel_size=1),
+            nn.ReLU(),
+            nn.Conv2d(num_in, num_in, kernel_size=1),
+            nn.Sigmoid()
+        )
+
         self.blocker = abn(num_in)
 
     def forward(self, embedding):
@@ -204,8 +213,11 @@ class Embedding(nn.Module):
 
         # pixels embedding
         fine_corr = torch.nn.functional.softmax(corr, dim=2) # (n, h * w, h/s * w/s)
-        pixels_embedding = torch.matmul(fine_corr, regions_embedding).permute(0, 2, 1) # (n, K, h * w)
-        out = embedding + self.blocker(self.conv_extend(pixels_embedding.view(n, pixels_embedding.size(1), h, w)))
+        pixels_embedding = torch.matmul(fine_corr, regions_embedding).permute(0, 2, 1).view(n, self.num_s, h, w) # (n, K, h, w)
+        pixels_embedding = self.conv_extend(pixels_embedding)
+
+        cat = torch.cat((embedding, pixels_embedding), dim=1) # (n, c + K, h, w)
+        out = embedding + self.channel_attention(cat) * pixels_embedding
 
         return out
 
