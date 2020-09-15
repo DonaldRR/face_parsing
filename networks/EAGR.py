@@ -300,6 +300,7 @@ class EAGRNet(nn.Module):
         self.block1 = Embedding(256, 128, 4, abn)
         self.block2 = Embedding(128, 64, 4, abn)
         self.layer6 = Decoder_Module(256, 128, num_classes, abn)
+        self.upsample = torch.nn.ConvTranspose2d(256, 128, kernel_size=(3, 3), stride=2, padding=1, output_padding=1)
         #self.layer7 = Decoder_Module(512, 256, 2, abn)
 
     def _make_layer(self, block, planes, blocks, stride=1, dilation=1, multi_grid=1):
@@ -331,7 +332,8 @@ class EAGRNet(nn.Module):
         x = self.layer5(x5) # 60 x 60
         #edge,edge_fea = self.edge_layer(x2,x3,x4)
         enhanced_x = self.block1(x)
-        x2 = torch.nn.functional.interpolate(self.bn5(self.conv5(enhanced_x)), size=(x2.size(2), x2.size(3)), mode='bilinear') + self.bn4(self.conv4(x2))
+        #x2 = torch.nn.functional.interpolate(self.bn5(self.conv5(enhanced_x)), size=(x2.size(2), x2.size(3)), mode='bilinear') + self.bn4(self.conv4(x2))
+        x2 = self.bn5(self.upsample(enhanced_x)) + self.bn4(self.conv4(x2))
         enhanced_x2 = self.block2(x2)
         seg, _ = self.layer6(enhanced_x, enhanced_x2)
         # seg_bi, _ = self.layer7(x, x2)

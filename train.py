@@ -62,7 +62,7 @@ def get_arguments():
       A list of parsed arguments.
     """
     parser = argparse.ArgumentParser(description="CE2P Network")
-    parser.add_argument("--name", type=str, default='no_edge_v2',
+    parser.add_argument("--name", type=str, default='no_edge_v2.1',
                         help="Name for the (saved)model")
     parser.add_argument("--pretrained-dir", type=str, default=PRETRAINED_DIR,
                         help="Where the pretrained networks are")
