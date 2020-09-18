@@ -191,6 +191,8 @@ class Embedding(nn.Module):
             nn.Conv2d(num_in, num_in, kernel_size=1),
             nn.Sigmoid()
         )
+        self.conv1 = nn.Conv1d(self.num_s, self.num_s, kernel_size=1)
+        self.conv2 = nn.Conv1d(self.num_s, self.num_s, kernel_size=1)
 
         self.blocker = abn(num_in)
 
@@ -200,20 +202,19 @@ class Embedding(nn.Module):
 
         # pixels to anchors non-local attention
         embedding_metric = self.conv_state(embedding).view(n, self.num_s, -1) # (n, T, h * w)
+        norm_embedding_metric = torch.nn.functional.normalize(self.conv1(embedding_metric), dim=1)
         regions_embedding = self.priors(embedding_metric.view(n, self.num_s, h, w)).view(n, self.num_s, -1) # (n, T, h/s * w/s)
-        corr = torch.matmul(embedding_metric.permute(0, 2, 1), regions_embedding) # (n, h * w, h/s * w/s)
+        norm_regions_embedding = torch.nn.functional.normalize(self.conv2(regions_embedding), dim=1)
+        r2p_corr =  torch.nn.functional.softmax(torch.matmul(norm_embedding_metric.permute(0, 2, 1), regions_embedding), dim=1).permute(0, 2, 1) # (n, h/s * w/s, h * w)
+        p2r_corr = torch.nn.functional.softmax(torch.matmul(embedding_metric.permute(0, 2, 1), norm_regions_embedding), dim=2) # (n, h * w, h/s * w/s)
 
         # regions embedding
         embedding_proj = self.conv_proj(embedding) # (n, K, h * w)
-        corse_corr = torch.nn.functional.softmax(corr, dim=1).permute(0, 2, 1) # (n, h/s * w/s, h * w)
-        regions_embedding = torch.matmul(corse_corr, embedding_proj.view(n, embedding_proj.size(1), -1).permute(0, 2, 1)) # (n, h/s * w/s, K)
-        if self.normalize:
-            regions_embedding = regions_embedding * (1. / corse_corr.size(2))
+        regions_embedding = torch.matmul(r2p_corr, embedding_proj.view(n, embedding_proj.size(1), -1).permute(0, 2, 1)) # (n, h/s * w/s, K)
         regions_embedding = self.gcn(regions_embedding.permute(0, 2, 1)).permute(0, 2, 1) # (n, K, h/s * w/s)
 
         # pixels embedding
-        fine_corr = torch.nn.functional.softmax(corr, dim=2) # (n, h * w, h/s * w/s)
-        pixels_embedding = torch.matmul(fine_corr, regions_embedding).permute(0, 2, 1).view(n, self.num_s, h, w) # (n, K, h, w)
+        pixels_embedding = torch.matmul(p2r_corr, regions_embedding).permute(0, 2, 1).view(n, self.num_s, h, w) # (n, K, h, w)
         pixels_embedding = self.conv_extend(pixels_embedding)
 
         cat = torch.cat((embedding, pixels_embedding), dim=1) # (n, c + K, h, w)

@@ -29,14 +29,6 @@ def vis_embedding(embeddings):
     images = []
     for i in range(n):
         images.append(draw_projection(embeddings[i]))
-#        embedding_map = embeddings[i]
-#        embedding_map = np.reshape(embedding_map, (c, -1))
-#        embedding_map = np.moveaxis(embedding_map, 1, 0)
-#        pca = PCA(n_components=3)
-#        reduced_embedding_map = pca.fit_transform(embedding_map)
-#        reduced_embedding_map = normalize(reduced_embedding_map) * 128 + 128
-#        reduced_embedding_map = np.reshape(reduced_embedding_map, (h, w, 3)).astype(int)
-#        images.append(np.moveaxis(reduced_embedding_map, 2, 0))
     images = np.stack(images, axis=0)
 
     return torch.from_numpy(images).permute(0, 3, 1, 2)
