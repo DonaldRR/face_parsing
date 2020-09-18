@@ -62,7 +62,7 @@ def get_arguments():
       A list of parsed arguments.
     """
     parser = argparse.ArgumentParser(description="CE2P Network")
-    parser.add_argument("--name", type=str, default='no_edge_v2.1',
+    parser.add_argument("--name", type=str, default='no_edge_v2.1_wo_DL',
                         help="Name for the (saved)model")
     parser.add_argument("--pretrained-dir", type=str, default=PRETRAINED_DIR,
                         help="Where the pretrained networks are")
@@ -271,9 +271,10 @@ def main():
                     preds, shallow_embedding, deep_embedding = model(images)
 
                     loss_parse = criterion_CE(preds, labels)
-                    loss_intra_s, loss_inter_s, loss_reg1 = criterion_DL(shallow_embedding, labels1)
-                    loss_intra_d, loss_inter_d, loss_reg2 = criterion_DL(deep_embedding, labels1)
-                    loss = loss_parse * 2 + loss_intra_s * .5 + loss_intra_d * .5+ loss_inter_s * .5 + loss_inter_d * .5 + loss_reg1 * .5 + loss_reg2 * .5
+                    #loss_intra_s, loss_inter_s, loss_reg1 = criterion_DL(shallow_embedding, labels1)
+                    #loss_intra_d, loss_inter_d, loss_reg2 = criterion_DL(deep_embedding, labels1)
+                    #loss = loss_parse * 2 + loss_intra_s * .5 + loss_intra_d * .5+ loss_inter_s * .5 + loss_inter_d * .5 + loss_reg1 * .5 + loss_reg2 * .5
+                    loss = loss_parse * 2
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
@@ -315,16 +316,10 @@ def main():
                             writer.add_image('Embd1/', shallow_embedding, i_iter)
                             writer.add_image('Embd2/', deep_embedding, i_iter)
 
-                    msg = 'epoch:%d | l_parse:%.2f l_intra_s:%.2f l_inter_s:%.2f l_intra_d:%.2f l_inter_d:%.2f l_reg_s:%.2f l_reg_d:%.2f l_sum:%.2f' % \
+                    msg = 'epoch:%d | l_parse:%.2f l_sum:%.2f' % \
                           (
                               epoch,
                               loss_parse.data.cpu().numpy(),
-                              loss_intra_s.data.cpu().numpy(),
-                              loss_inter_s.data.cpu().numpy(),
-                              loss_intra_d.data.cpu().numpy(),
-                              loss_inter_d.data.cpu().numpy(),
-                              loss_reg1.data.cpu().numpy(),
-                              loss_reg2.data.cpu().numpy(),
                               loss.data.cpu().numpy()
                           )
                     pbar.set_description(msg)
