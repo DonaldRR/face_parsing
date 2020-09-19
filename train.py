@@ -62,7 +62,7 @@ def get_arguments():
       A list of parsed arguments.
     """
     parser = argparse.ArgumentParser(description="CE2P Network")
-    parser.add_argument("--name", type=str, default='no_edge_v2',
+    parser.add_argument("--name", type=str, default='no_edge_v2_shallow_only',
                         help="Name for the (saved)model")
     parser.add_argument("--pretrained-dir", type=str, default=PRETRAINED_DIR,
                         help="Where the pretrained networks are")
@@ -273,7 +273,7 @@ def main():
                     loss_parse = criterion_CE(preds, labels)
                     loss_intra_s, loss_inter_s, loss_reg1 = criterion_DL(shallow_embedding, labels1)
                     loss_intra_d, loss_inter_d, loss_reg2 = criterion_DL(deep_embedding, labels1)
-                    loss = loss_parse * 2 + loss_intra_s * .5 + loss_intra_d * .5+ loss_inter_s * .5 + loss_inter_d * .5 + loss_reg1 * .5 + loss_reg2 * .5
+                    loss = loss_parse * 2 + loss_intra_s * .5 + loss_intra_d * 0 + loss_inter_s * .5 + loss_inter_d * 0 + loss_reg1 * .5 + loss_reg2 * 0
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
