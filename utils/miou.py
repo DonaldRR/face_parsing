@@ -117,6 +117,25 @@ def compute_mean_ioU(preds, scales, centers, num_classes, datadir, input_size=[4
 
     confusion_matrix = np.zeros((num_classes, num_classes))
 
+    label_names = [
+        'background',
+        'face_skin',
+        'left_eyebrow',
+        'right_eyebrow',
+        'left_eye',
+        'right_eye',
+        'nose',
+        'upper_lip',
+        'inner_mouth',
+        'lower_lip',
+        'hair'
+    ]
+    merge_names = {
+        'eyes': ['left_eye', 'right_eye'],
+        'brows': ['left_brows', 'right_eyebrow'],
+        'mouth': ['inner_mouth', 'upper_lip', 'lower_lip'],
+        'overall': ['left_eye', 'right_eye', 'left_brows', 'right_eyebrow', 'inner_mouth', 'upper_lip', 'lower_lip']
+    }
 #    label_names_file = os.path.join(datadir, 'label_names.txt')
 #    gt_label_names = pred_label_names = _read_names(label_names_file)
 #

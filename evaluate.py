@@ -101,33 +101,54 @@ def valid(model, valloader, input_size, num_samples, dir=None):
             if dir:
                 pass
 
+    label_names = [
+        'background',
+        'face_skin',
+        'left_eyebrow',
+        'right_eyebrow',
+        'left_eye',
+        'right_eye',
+        'nose',
+        'upper_lip',
+        'inner_mouth',
+        'lower_lip',
+        'hair'
+    ]
+    merge_names = {
+        'eyes': ['left_eye', 'right_eye'],
+        'brows': ['left_eyebrow', 'right_eyebrow'],
+        'mouth': ['inner_mouth', 'upper_lip', 'lower_lip'],
+        'overall': ['left_eye', 'right_eye', 'left_eyebrow', 'right_eyebrow', 'inner_mouth', 'upper_lip', 'lower_lip']
+    }
     def compute_mIoU_f1(m):
-        n_class = len(m)
-        mIoUs = []
-        f1s = []
-        recalls = []
-        precisions = []
-        for i in range(n_class):
-            intersection = m[i][i] + 1
-            n_true = np.sum(m[i, :]) + n_class
-            n_pos = np.sum(m[:, i]) + n_class
-            recall = intersection / n_true
-            precision = intersection / n_pos
-            recalls.append(recall)
-            precisions.append(precision)
-            f1s.append(2 / (1 / recall + 1 / precision))
-            mIoUs.append(intersection / (n_true + n_pos - intersection))
 
-        return mIoUs, f1s, recalls, precisions
+        n_pos = np.sum(m, axis=0)
+        n_true = np.sum(m, axis=1)
+        tp = np.diag(m)
+        recalls = tp / (n_true + 1)
+        precisions = tp / (1 + n_pos)
+        IoUs = tp / (1 + n_true + n_pos - tp)
+        f1s = 2 * tp / (1 + n_true + n_pos)
+        f1s = list(f1s)
+        for merge_label, labels in merge_names.items():
+            idxs = [label_names.index(label) for label in labels]
+            merge_tp = np.array([tp[idx] for idx in idxs])
+            merge_true = np.array([n_true[idx] for idx in idxs])
+            merge_pos = np.array([n_pos[idx] for idx in idxs])
+            f1s.append(2 * merge_tp.sum() / (1 + merge_true.sum() + merge_pos.sum()))
 
-    parsing_mIoUs, parsing_f1s, parsing_recalls, parsing_precisions = compute_mIoU_f1(ConfMat_parsing)
-    parsing_mean_accuracy = np.diag(ConfMat_parsing).sum() / ConfMat_parsing.sum()
-    edge_mIoUs, edge_f1s, edge_recalls, edge_precisions = compute_mIoU_f1(ConfMat_edge)
-    edge_mean_accuracy = np.diag(ConfMat_edge).sum() / ConfMat_edge.sum()
+        return {
+            'recall': list(recalls),
+            'precision':list(precisions),
+            'iou': list(IoUs),
+            'f1': list(f1s),
+        }
 
+    label_names += list(merge_names.keys())
     return {
-        'parsing': {'mIoU': parsing_mIoUs, 'f1': parsing_f1s, 'recalls': parsing_recalls, 'precisions': parsing_precisions, 'mean_accuracy': parsing_mean_accuracy},
-        'edge': {'mIoU': edge_mIoUs, 'f1': edge_f1s, 'recalls': edge_recalls, 'precisions': edge_precisions, 'mean_accuracy': edge_mean_accuracy}
+        'parsing': compute_mIoU_f1(ConfMat_parsing),
+        'names': label_names
+        #'edge': compute_mIoU_f1(ConfMat_edge),
     }
 
 

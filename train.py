@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 
 start = timeit.default_timer()
   
-BATCH_SIZE = 3
+BATCH_SIZE = 4
 DATA_DIRECTORY = './dataset/Helen'
 IGNORE_LABEL = 255
 INPUT_SIZE = '473,473'
@@ -43,7 +43,7 @@ RESTORE_FROM = './backbones/resnet101-imagenet.pth'
 PRETRAINED_DIR = './backbones'
 SAVE_NUM_IMAGES = BATCH_SIZE
 SAVE_PRED_EVERY = 10000
-SNAPSHOT_DIR = './snapshots/'
+SNAPSHOT_DIR = '/home/ubuntu/ckpts/face_parsing'
 WEIGHT_DECAY = 0.0005
  
 def str2bool(v):
@@ -62,7 +62,7 @@ def get_arguments():
       A list of parsed arguments.
     """
     parser = argparse.ArgumentParser(description="CE2P Network")
-    parser.add_argument("--name", type=str, default='baseline',
+    parser.add_argument("--name", type=str, default='baseline28',
                         help="Name for the (saved)model")
     parser.add_argument("--pretrained-dir", type=str, default=PRETRAINED_DIR,
                         help="Where the pretrained networks are")
@@ -162,13 +162,20 @@ def set_bn_momentum(m):
 
 def main():
     """Create the model and start the training."""
+    print('Available %d GPUs' % torch.cuda.device_count())
+    main_rank = 0
+    if args.batch_size % 2 == 0:
+        args.batch_size -= 1
+    args.save_num_images = args.batch_size
+    args.local_rank += main_rank
 
     if not os.path.exists(args.snapshot_dir):
         os.makedirs(args.snapshot_dir)
     save_dir = os.path.join(args.snapshot_dir, args.name)
-    if os.path.exists(save_dir):
-        os.system('rm -r %s' % save_dir)
-    os.mkdir(save_dir)
+    if args.local_rank == main_rank:
+        if os.path.exists(save_dir):
+            os.system('rm -r %s' % save_dir)
+            os.mkdir(save_dir)
 
     h, w = map(int, args.input_size.split(','))
     input_size = [h, w]
@@ -251,6 +258,7 @@ def main():
 
     total_iters = args.epochs * len(trainloader)
     n_viz_iters = len(trainloader) // 2
+    cur_iter = 0
     with tqdm.tqdm(total=total_iters, position=0) as pbar:
         for epoch in range(args.start_epoch, args.epochs):
             model.train()
@@ -269,19 +277,21 @@ def main():
 
                 loss_parse, loss_edge, loss_att_edge = criterion(preds, [labels, edges])
                 loss = loss_parse * 1 + loss_edge * 1 + loss_att_edge * 4
-                optimizer.zero_grad()
                 loss.backward()
-                optimizer.step()
+                cur_iter += 1
+                if cur_iter % 4 == 0:
+                    optimizer.step()
+                    optimizer.zero_grad()
 
-                with torch.no_grad():
-                    loss = loss.detach() * labels.shape[0]
-                    count = labels.new_tensor([labels.shape[0]], dtype=torch.long)
-                    if dist.is_initialized():
-                        dist.all_reduce(count, dist.ReduceOp.SUM)
-                        dist.all_reduce(loss, dist.ReduceOp.SUM)
-                    loss /= count.item()
+                #with torch.no_grad():
+                loss = loss.detach() * labels.shape[0]
+                count = labels.new_tensor([labels.shape[0]], dtype=torch.long)
+                if dist.is_initialized():
+                    dist.all_reduce(count, dist.ReduceOp.SUM)
+                    dist.all_reduce(loss, dist.ReduceOp.SUM)
+                loss /= count.item()
 
-                if not dist.is_initialized() or dist.get_rank() == 0:
+                if not dist.is_initialized() or dist.get_rank() == main_rank:
                     if i_iter % (n_viz_iters // 5) == 0:
                         writer.add_scalar('learning_rate', lr, i_iter)
                         writer.add_scalar('loss', loss.data.cpu().numpy(), i_iter)
@@ -326,9 +336,11 @@ def main():
 
                 if epoch % args.test_fre == 0:
                     valid_dict = valid(model, valloader, input_size, num_samples)
+                    label_names = valid_dict['names']
+                    del valid_dict['names']
                     def write_tf(prefix, arr, epoch, writer):
                         for i, value in enumerate(arr):
-                            writer.add_scalar(prefix+'/%d' % i, value, epoch)
+                            writer.add_scalar(prefix+'/%s' % label_names[i], value, epoch)
 
                     for semantic_name, semantic_ret in valid_dict.items():
                         for metric_name, metric_values in semantic_ret.items():
@@ -336,17 +348,16 @@ def main():
                                 write_tf(semantic_name+'_'+metric_name, metric_values, epoch, writer)
                             else:
                                 writer.add_scalar(semantic_name+'_'+metric_name, metric_values, epoch)
-                        mean_mIoU_wo_bg = np.average(semantic_ret['mIoU'][1:])
+                        mean_mIoU_wo_bg = np.average(semantic_ret['iou'][1:])
                         mean_f1_wo_bg = np.average(semantic_ret['f1'][1:])
-                        mean_mIoU = np.average(semantic_ret['mIoU'])
+                        mean_mIoU = np.average(semantic_ret['iou'])
                         mean_f1 = np.average(semantic_ret['f1'])
                         writer.add_scalar(semantic_name+'_mean_mIoU/with_bg', mean_mIoU, epoch)
                         writer.add_scalar(semantic_name+'_mean_mIoU/wo_bg', mean_mIoU_wo_bg, epoch)
                         writer.add_scalar(semantic_name+'_mean_f1/with_bg', mean_f1, epoch)
                         writer.add_scalar(semantic_name+'_mean_f1/wo_bg', mean_f1_wo_bg, epoch)
-                        writer.add_scalar(semantic_name+'_'+'mean_acc', semantic_ret['mean_accuracy'], epoch)
-                        print('Epoch %d | %s \n\tmean_mIoU=%.4f \tmean_f1=%.4f \tmean_mIoU_wo_bg:%.4f \tmean_f1_wo_bg:%.4f \tmean_accuracy:%.4f' %
-                              (epoch, semantic_name, mean_mIoU, mean_f1, mean_mIoU_wo_bg, mean_f1_wo_bg, semantic_ret['mean_accuracy']))
+                        print('Epoch %d | %s \n\tmean_mIoU=%.4f \tmean_f1=%.4f \tmean_mIoU_wo_bg:%.4f \tmean_f1_wo_bg:%.4f' %
+                              (epoch, semantic_name, mean_mIoU, mean_f1, mean_mIoU_wo_bg, mean_f1_wo_bg))
 
 
     end = timeit.default_timer()
